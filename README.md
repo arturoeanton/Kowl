@@ -2,6 +2,9 @@
 Kowl is one watcher of files that, it trigger scripts js.  The Scripts can execute command of console  
 (curl, ls, cp, mv, a.out, ...)
 
+[![asciicast](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf.svg)](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf)
+
+
 ### Run
 ```
 ./kowl /tmp/foo script.js
