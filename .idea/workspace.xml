@@ -2,12 +2,6 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="dcd4b451-c1b3-4a53-b310-4f917ebfa13b" name="Default Changelist" comment="">
-      <change afterPath="$PROJECT_DIR$/js/crypto.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/js/exec.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/js/file.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/example.js" beforeDir="false" afterPath="$PROJECT_DIR$/example.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kowl" beforeDir="false" afterPath="$PROJECT_DIR$/kowl" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kowl.go" beforeDir="false" afterPath="$PROJECT_DIR$/kowl.go" afterDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
@@ -23,14 +17,15 @@
           <entry key="project.closed" value="3" />
           <entry key="project.open.time.1" value="1" />
           <entry key="project.open.time.3" value="1" />
+          <entry key="project.open.time.5" value="1" />
           <entry key="project.open.time.6" value="1" />
-          <entry key="project.opened" value="3" />
+          <entry key="project.opened" value="4" />
         </counts>
       </usages-collector>
       <usages-collector id="statistics.vcs.git.usages" />
       <usages-collector id="statistics.file.types.edit">
         <counts>
-          <entry key="Go" value="2396" />
+          <entry key="Go" value="2465" />
           <entry key="JavaScript" value="611" />
         </counts>
       </usages-collector>
@@ -52,22 +47,19 @@
       </usages-collector>
       <usages-collector id="statistics.file.extensions.edit">
         <counts>
-          <entry key="go" value="2396" />
+          <entry key="go" value="2465" />
           <entry key="js" value="611" />
         </counts>
       </usages-collector>
     </session>
   </component>
   <component name="FileEditorManager">
-    <leaf>
+    <leaf SIDE_TABS_SIZE_LIMIT_KEY="300">
       <file pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/kowl.go">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="387">
-              <caret line="125" selection-start-line="125" selection-end-line="125" />
-              <folding>
-                <element signature="e#14#253#0" expanded="true" />
-              </folding>
+            <state relative-caret-position="642">
+              <caret line="142" column="17" selection-start-line="142" selection-start-column="17" selection-end-line="142" selection-end-column="17" />
             </state>
           </provider>
         </entry>
@@ -121,6 +113,7 @@
       <foldersAlwaysOnTop value="true" />
     </navigator>
     <panes>
+      <pane id="Scope" />
       <pane id="ProjectPane">
         <subPane>
           <expand>
@@ -137,67 +130,10 @@
               <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
               <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
             </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-              <item name="gopkg.in" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-              <item name="gopkg.in" type="462c0819:PsiDirectoryNode" />
-              <item name="h2non" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-              <item name="gopkg.in" type="462c0819:PsiDirectoryNode" />
-              <item name="h2non" type="462c0819:PsiDirectoryNode" />
-              <item name="gentleman.v2" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-              <item name="gopkg.in" type="462c0819:PsiDirectoryNode" />
-              <item name="h2non" type="462c0819:PsiDirectoryNode" />
-              <item name="gentleman.v2" type="462c0819:PsiDirectoryNode" />
-              <item name="plugins" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="Kowl" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="GOPATH &lt;Kowl&gt;" type="20ee2d1f:SyntheticLibraryElementNode" />
-              <item name="src" type="462c0819:PsiDirectoryNode" />
-              <item name="gopkg.in" type="462c0819:PsiDirectoryNode" />
-              <item name="h2non" type="462c0819:PsiDirectoryNode" />
-              <item name="gentleman.v2" type="462c0819:PsiDirectoryNode" />
-              <item name="plugins" type="462c0819:PsiDirectoryNode" />
-              <item name="body" type="462c0819:PsiDirectoryNode" />
-            </path>
           </expand>
           <select />
         </subPane>
       </pane>
-      <pane id="Scope" />
     </panes>
   </component>
   <component name="PropertiesComponent">
@@ -234,8 +170,9 @@
   </component>
   <component name="ToolWindowManager">
     <frame x="0" y="23" width="1440" height="826" extended-state="0" />
+    <editor active="true" />
     <layout>
-      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.25679544" />
+      <window_info active="true" content_ui="combo" id="Project" order="0" visible="true" weight="0.26037195" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
       <window_info id="Favorites" order="2" side_tool="true" />
       <window_info anchor="bottom" id="Message" order="0" />
@@ -293,13 +230,11 @@
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
           <url>file://$PROJECT_DIR$/js/crypto.go</url>
           <line>3</line>
-          <properties />
           <option name="timeStamp" value="8" />
         </line-breakpoint>
         <line-breakpoint enabled="true" type="DlvLineBreakpoint">
           <url>file://$PROJECT_DIR$/js/crypto.go</url>
           <line>16</line>
-          <properties />
           <option name="timeStamp" value="9" />
         </line-breakpoint>
       </breakpoints>
@@ -395,9 +330,6 @@
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="120">
           <caret line="8" column="6" selection-start-line="8" selection-start-column="6" selection-end-line="8" selection-end-column="6" />
-          <folding>
-            <element signature="e#12#49#0" expanded="true" />
-          </folding>
         </state>
       </provider>
     </entry>
@@ -405,9 +337,6 @@
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="105">
           <caret line="7" lean-forward="true" selection-start-line="7" selection-end-line="7" />
-          <folding>
-            <element signature="e#12#68#0" expanded="true" />
-          </folding>
         </state>
       </provider>
     </entry>
@@ -420,11 +349,8 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/kowl.go">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="387">
-          <caret line="125" selection-start-line="125" selection-end-line="125" />
-          <folding>
-            <element signature="e#14#253#0" expanded="true" />
-          </folding>
+        <state relative-caret-position="642">
+          <caret line="142" column="17" selection-start-line="142" selection-start-column="17" selection-end-line="142" selection-end-column="17" />
         </state>
       </provider>
     </entry>
