@@ -132,6 +132,20 @@ func runjs(script string, op string, name string) {
 	vm.Set("kBodyXML", body.XML)
 	vm.Set("kBodyString", body.String)
 
+	vm.Set("kGetEnv",os.Getenv)
+	vm.Set("kSetEnv",os.Setenv)
+	vm.Set("kHostname",os.Hostname)
+	vm.Set("kGetpid",os.Getpid)
+	vm.Set("kGetppid",os.Getppid)
+	vm.Set("kGetgid",os.Getgid)
+	vm.Set("kGetuid",os.Getuid)
+	vm.Set("kGetegid",os.Getegid)
+	vm.Set("kArgs",os.Args)
+
+	
+
+
+
 	vm.Run(code)
 
 	vm.Call(strings.ToLower(op), nil, name, op, os.Args)
