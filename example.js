@@ -11,6 +11,15 @@ function exist(name, op, args) {
 }
 
 function write(name, op, args) {
+ 
+    if (kGetEnv("kFlag") != 1){
+        data = kFileToString(name) ;
+        kStringToFile("8080",name)
+        kSetEnv("kFlag",1)
+    }else{
+        kSetEnv("kFlag",0)
+    }
+    
     console.log(name + " - " + op + " - " + args)
 }
 
@@ -29,7 +38,8 @@ function rename(name, op, args) {
 }
 
 function chmod(name, op, args) {
-    data =  kEncrypt("123", "Hello word! ")
+   /* data =  kEncrypt("123", "Hello word! ")
+    console.log(data[0])
     data =   kDecrypt("123", data[0])
     console.log(data[0])
     
@@ -42,18 +52,18 @@ function chmod(name, op, args) {
     console.log("Body: "+ res[0].String())
 
     kCli.URL("http://httpbin.org/post")
-    req = kCli.Request()
-    req.Method("POST")
-    req.Use(kJSON({"foo": "bar"}))
-    res = req.Send()
+    req1 = kCli.Request()
+    req1.Method("POST")
+    req1.Use(kBodyJSON({"foo": "bar"}))
+    res1 = req1.Send()
   
 
-  console.log("Status: ", res[0].StatusCode)
-  console.log("\nBody: ", res[0].String())
+  console.log("Status: ", res1[0].StatusCode)
+  console.log("\nBody: ", res1[0].String())
 
+    console.log(kHostname())
 
-
-    data = kFileToString(name) ;
-    console.log(data[0].split("\n")[1])
+    data = kFileToString(name) 
+    console.log(data[0].split("\n")[1])*/
     console.log(name + " - " + op + " - " + args)
 }
