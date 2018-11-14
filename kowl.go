@@ -142,7 +142,7 @@ func runjs(script string, op string, name string) {
 	vm.Set("kGetegid",os.Getegid)
 	vm.Set("kArgs",os.Args)
 
-	
+
 
 
 
