@@ -97,6 +97,40 @@ err = kRemoveFile("file.txt")
 
 ```
 
+#### kEncrypt/kDecrypt
+> func KEncrypt(skey , message string) ( string, int)
+> func KDecrypt(skey, securemess string) ( string,  int)
+```
+data = kEncrypt("1234","textoPlano")
+data = kDecrypt("1234",data[0])
+console.log(data[0])
+
+```
+
+#### Integration with  gentleman [link to Google!](https://github.com/h2non/gentleman)
+> Example GET
+```
+kCli.URL("http://httpbin.org")
+req = kCli.Request()
+req.Path("/headers")
+req.SetHeader("Client", "gentleman")
+res = req.Send()
+console.log("Body: "+ res[0].String())
+```
+
+Example POST
+```
+kCli.URL("http://httpbin.org/post")
+req1 = kCli.Request()
+req1.Method("POST")
+req1.Use(kBodyJSON({"foo": "bar"}))
+res1 = req1.Send()
+
+
+console.log("Status: ", res1[0].StatusCode)
+console.log("\nBody: ", res1[0].String())
+```
+
 
 
 
