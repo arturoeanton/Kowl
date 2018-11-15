@@ -1,8 +1,8 @@
-# Kowl
-Kowl is one watcher of files that, it trigger scripts js.  The Scripts can execute command of console  
-(curl, ls, cp, mv, a.out, ...)
+# Kowl 
+Kowl is one watcher of files that (thank to [fsnotify](https://github.com/fsnotify/fsnotify) ) , it trigger scripts js (thank to [OttoJs](https://github.com/robertkrimen/otto)). 
 
 [![asciicast](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf.svg)](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf)
+
 
 
 ### Run
@@ -133,15 +133,15 @@ console.log("\nBody: ", res1[0].String())
 
 #### Utils SO
 
-> kGetEnv    =  os.Getenv
-> kSetEnv    =  os.Setenv
-> kHostname  =  os.Hostname
-> kGetpid    =  os.Getpid
-> kGetppid   =  os.Getppid
-> kGetgid    =  os.Getgid
-> kGetuid    =  os.Getuid
-> kGetegid   =  os.Getegid
-> kArgs      =  os.Args
+> kGetEnv    =  os.Getenv  
+> kSetEnv    =  os.Setenv  
+> kHostname  =  os.Hostname  
+> kGetpid    =  os.Getpid  
+> kGetppid   =  os.Getppid  
+> kGetgid    =  os.Getgid  
+> kGetuid    =  os.Getuid  
+> kGetegid   =  os.Getegid  
+> kArgs      =  os.Args  
 
 > Example 1
 ```
@@ -164,3 +164,7 @@ function write(name, op, args) {
     }
 }
 ```
+
+
+##### Notes: 
+* fsnotify used iNotify
