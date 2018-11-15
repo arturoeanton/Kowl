@@ -107,7 +107,7 @@ console.log(data[0])
 
 ```
 
-#### Integration with  gentleman [link to Google!](https://github.com/h2non/gentleman)
+#### Integration with  gentleman [Gentleman](https://github.com/h2non/gentleman)
 > Example GET
 ```
 kCli.URL("http://httpbin.org")
@@ -118,7 +118,7 @@ res = req.Send()
 console.log("Body: "+ res[0].String())
 ```
 
-Example POST
+> Example POST
 ```
 kCli.URL("http://httpbin.org/post")
 req1 = kCli.Request()
