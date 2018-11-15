@@ -107,7 +107,7 @@ console.log(data[0])
 
 ```
 
-#### Integration with  gentleman [Gentleman](https://github.com/h2non/gentleman)
+#### Integration with [Gentleman](https://github.com/h2non/gentleman)
 > Example GET
 ```
 kCli.URL("http://httpbin.org")
@@ -131,6 +131,36 @@ console.log("Status: ", res1[0].StatusCode)
 console.log("\nBody: ", res1[0].String())
 ```
 
+#### Utils SO
 
+> kGetEnv    =  os.Getenv
+> kSetEnv    =  os.Setenv
+> kHostname  =  os.Hostname
+> kGetpid    =  os.Getpid
+> kGetppid   =  os.Getppid
+> kGetgid    =  os.Getgid
+> kGetuid    =  os.Getuid
+> kGetegid   =  os.Getegid
+> kArgs      =  os.Args
 
+> Example 1
+```
+kSetEnv("VAR","data")
+d = kGetEnv("VAR")
+console.log(d)
+console.log(kHostname())
 
+```
+
+#### Example for rewrite one value in file
+```
+function write(name, op, args) {
+    if (kGetEnv("kFlag") != 1){
+        data = kFileToString(name) ;
+        kStringToFile("8080",name)
+        kSetEnv("kFlag",1)
+    }else{
+        kSetEnv("kFlag",0)
+    }
+}
+```
