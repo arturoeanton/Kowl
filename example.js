@@ -12,7 +12,6 @@ function exist(name, op, args) {
 
 function write(name, op, args) {
     console.log(name + " - " + op + " - " + args, kNow())
-
 }
 
 function create(name, op, args) {
