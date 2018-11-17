@@ -2,7 +2,6 @@ package main
 
 import (
 	"Kowl/js"
-	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/jessevdk/go-flags"
 	"github.com/robertkrimen/otto"
@@ -71,10 +70,7 @@ func main() {
 	millisecond := *opts.Millisecond
 	flagNotWatcher := opts.FlagNotWatcher
 
-	fmt.Println(filename)
-	fmt.Println(script)
-	fmt.Println(millisecond)
-	fmt.Println(flagNotWatcher)
+
 	errCh = make(chan error)
 
 	var watcher fsnotify.Watcher
