@@ -16,7 +16,7 @@ Example 2
 ```
 
 
-### Execute
+### Help
 ```
 ./kowl -h
 Usage:
