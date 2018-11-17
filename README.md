@@ -6,8 +6,30 @@ Kowl is one watcher of files that (thank to [fsnotify](https://github.com/fsnoti
 
 
 ### Run
+Example 1
 ```
-./kowl /tmp/foo script.js
+./kowl -f /tmp/foo -j example.js
+```
+Example 2
+```
+./kowl -f /tmp/foo -j example.js -w
+```
+
+
+### Execute
+```
+./kowl -h
+Usage:
+  kowl [OPTIONS]
+
+Application Options:
+  -f, --filename=       filename that wants to be observed
+  -j, --javascript=     Js that wants that executes the actions
+  -m, --millisecond=    Millisecond change check defaul 1000 (default: 1000)
+  -w, --flagNotWatcher  Watcher disable
+
+Help Options:
+  -h, --help            Show this help message
 ```
 
 ### Script JS
