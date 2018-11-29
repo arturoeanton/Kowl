@@ -4,6 +4,12 @@ Kowl is one watcher of files that (thank to [fsnotify](https://github.com/fsnoti
 [![asciicast](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf.svg)](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf)
 
 
+### Dependencies
+go get -u github.com/robertkrimen/otto
+go get -u github.com/fsnotify/fsnotify
+go get -u gopkg.in/h2non/gentleman.v2
+go get -u github.com/jessevdk/go-flags
+
 
 ### Run
 Example 1
