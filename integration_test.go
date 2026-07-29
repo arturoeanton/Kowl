@@ -428,3 +428,53 @@ func TestEndToEndTwoFilesWritingEachOtherSettle(t *testing.T) {
 			runs, journalOf(t, journal))
 	}
 }
+
+// SIGHUP has to reload the script without restarting the process.
+func TestBinaryReloadsOnSIGHUP(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "kowl")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("building kowl: %v\n%s", err, out)
+	}
+
+	observed := filepath.Join(dir, "observed.txt")
+	if err := os.WriteFile(observed, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, `function exist(name, op) { console.log("hello from the script") }`)
+
+	cmd := exec.Command(binary, "-f", observed, "-j", script, "-m", "0")
+	var output safeBuffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting kowl: %v", err)
+	}
+	defer func() {
+		cmd.Process.Signal(syscall.SIGTERM)
+		cmd.Wait()
+	}()
+
+	waitFor(t, 5*time.Second, "kowl to start watching", func() bool {
+		return strings.Contains(output.String(), "hello from the script")
+	})
+
+	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatalf("signalling kowl: %v", err)
+	}
+	waitFor(t, 5*time.Second, "the reload to be reported", func() bool {
+		return strings.Contains(output.String(), "reloaded")
+	})
+
+	// SIGHUP must not be mistaken for a request to stop.
+	if cmd.ProcessState != nil {
+		t.Fatalf("kowl exited on SIGHUP\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "hooks: exist") {
+		t.Fatalf("the reload did not report what the script defines:\n%s", output.String())
+	}
+}

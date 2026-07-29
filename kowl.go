@@ -57,6 +57,29 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// serveReloads reloads the script whenever SIGHUP arrives.
+func serveReloads(ctx context.Context, signals <-chan os.Signal, runner *Runner, logger *Logger) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-signals:
+			hooks, err := runner.Reload()
+			switch {
+			case err != nil:
+				// The old script is already gone, so the next event will try again and
+				// report the same thing. Saying so here is what makes the reload
+				// itself visible.
+				logger.Errorf("reload failed: %v", err)
+			case len(hooks) == 0:
+				logger.Errorf("reloaded %s, which now defines none of the known hooks", runner.scriptPath)
+			default:
+				logger.Infof("reloaded %s (hooks: %s)", runner.scriptPath, strings.Join(hooks, ", "))
+			}
+		}
+	}
+}
+
 // run parses args, validates the configuration and blocks until the process is
 // interrupted. It returns the exit code instead of calling os.Exit so that argument
 // handling is testable.
@@ -166,7 +189,17 @@ func run(args []string, stdout, stderr io.Writer) int {
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
+	reloads := make(chan os.Signal, 1)
+	signal.Notify(reloads, syscall.SIGHUP)
+	defer signal.Stop(reloads)
+
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		serveReloads(ctx, reloads, runner, logger)
+	}()
+
 	if !opts.FlagNotWatcher {
 		wg.Add(1)
 		go func() {

@@ -137,6 +137,16 @@ func newHookEvent(op, path string) map[string]interface{} {
 	return event
 }
 
+// Reload drops the loaded script so the next event reads it again, and reports what the
+// fresh copy defines. Kowl already reloads on its own when the file changes; this is for
+// the cases that leaves out, such as a script that pulls in state from somewhere else.
+func (r *Runner) Reload() ([]string, error) {
+	r.mu.Lock()
+	r.discard()
+	r.mu.Unlock()
+	return r.DefinedHooks()
+}
+
 // DefinedHooks reports which of hookNames the script implements. It doubles as the
 // startup check: a script that does not parse is reported before Kowl starts watching,
 // instead of failing silently on every event.

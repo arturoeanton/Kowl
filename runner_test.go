@@ -557,3 +557,60 @@ func TestRunReportsBothSidesOfACopyAndMove(t *testing.T) {
 		t.Fatalf("written = %q, want both sides %q", got, want)
 	}
 }
+
+// Kowl reloads on its own when the file changes. Reload covers what that leaves out: a
+// script whose behaviour depends on something other than its own bytes.
+func TestReloadRereadsAnUnchangedScript(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	key := "KOWL_TEST_RELOAD"
+	t.Setenv(key, "first")
+
+	script := writeScript(t, `
+		var captured = kGetEnv("`+key+`")
+		function write(name, op) { kStringToFile(captured, `+quote(out)+`) }`)
+	runner := NewRunner(script)
+
+	if _, err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, out); got != "first" {
+		t.Fatalf("hook wrote %q, want %q", got, "first")
+	}
+
+	// The file is untouched, so nothing about it tells Kowl to reload.
+	t.Setenv(key, "second")
+	if _, err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, out); got != "first" {
+		t.Fatalf("hook wrote %q without a reload, want the captured %q", got, "first")
+	}
+
+	hooks, err := runner.Reload()
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if strings.Join(hooks, ",") != "write" {
+		t.Fatalf("Reload reported hooks %v, want write", hooks)
+	}
+	if _, err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, out); got != "second" {
+		t.Fatalf("hook wrote %q after a reload, want %q", got, "second")
+	}
+}
+
+func TestReloadReportsAScriptThatNoLongerParses(t *testing.T) {
+	script := writeScript(t, `function write(name, op) {}`)
+	runner := NewRunner(script)
+	if _, err := runner.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	rewriteScript(t, script, `function write( {`)
+
+	if _, err := runner.Reload(); err == nil {
+		t.Fatal("Reload returned nil for a script that no longer parses")
+	}
+}

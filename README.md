@@ -144,6 +144,14 @@ Hooks never run concurrently, so a script can keep state in ordinary globals. Th
 kept between events and reloaded when the script file changes, which means edits take
 effect without a restart and reset the globals.
 
+Sending `SIGHUP` reloads the script too, and reports what the fresh copy defines. That
+covers what watching the file cannot: a script whose behaviour depends on the
+environment, or on something it read at load time.
+
+```
+kill -HUP $(pgrep kowl)
+```
+
 A hook that runs longer than `--hook-timeout` is interrupted and its VM discarded; the
 next event starts from a freshly loaded script. The same limit covers the script's top
 level, so a loop among the statements outside your functions is reported rather than
