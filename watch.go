@@ -141,8 +141,8 @@ func (h *observerHandle) stop() {
 // enumerates the tree and watches each directory in it, picking up new subdirectories on
 // the next tick.
 //
-// EXIST is dispatched synchronously each time an observer is established, so it is
-// always ordered before any event that observer produces.
+// EXIST goes out each time an observer is established, before that observer starts
+// reading, so it is always ordered ahead of the events it announces.
 func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *Logger) {
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
@@ -205,7 +205,6 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 				}
 				observers[path] = &observerHandle{cancel: observerCancel, done: done}
 				logger.Debugf("watching %s", path)
-				dispatch("EXIST", path)
 			}
 		}
 	}
@@ -222,6 +221,10 @@ func observe(ctx context.Context, path string, dispatch Dispatch, logger *Logger
 		watcher.Close()
 		return nil, fmt.Errorf("watching %s: %w", path, err)
 	}
+
+	// EXIST goes out before the reader starts, so it cannot be overtaken by an event
+	// from the very watcher it announces.
+	dispatch("EXIST", path)
 
 	done := make(chan struct{})
 	go func() {

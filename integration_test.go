@@ -321,3 +321,47 @@ func TestBinaryRejectsARunawayScriptInsteadOfHanging(t *testing.T) {
 		t.Fatalf("kowl did not say why it gave up:\n%s", output.String())
 	}
 }
+
+// A slow hook used to hold the supervisor's goroutine, so watch bookkeeping stopped:
+// paths that appeared were not picked up until every queued hook had finished.
+func TestEndToEndSlowHookDoesNotStallTheSupervisor(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "journal.txt")
+
+	// The hook is slow enough that, run inline, three files would take over a second.
+	script := writeScript(t, `
+		function exist(name, op, event) {
+			kAppendFile(event.name + "\n", `+quote(journal)+`);
+			kExec("sleep", "0.4");
+		}`)
+
+	runner := NewRunner(script)
+	logger := NewLogger(&safeBuffer{}, LevelError, FormatText)
+	events := newDispatcher(runner.Run, logger, 0, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{filepath.Join(dir, "*.txt")},
+			Interval:   20 * time.Millisecond,
+			MaxWatches: 64,
+		}, events.Dispatch, logger)
+	}()
+
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Every path must be queued promptly, well inside the time the hooks take to run.
+	waitFor(t, 2*time.Second, "all three paths to be queued", func() bool {
+		return events.submitted.Load() >= 3
+	})
+
+	cancel()
+	<-done
+	events.Close()
+}

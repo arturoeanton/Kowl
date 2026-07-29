@@ -139,6 +139,18 @@ next event starts from a freshly loaded script. The same limit covers the script
 level, so a loop among the statements outside your functions is reported rather than
 left to hang.
 
+### Backpressure
+
+Events are queued and run one at a time, in order. Nothing upstream waits for a hook:
+the fsnotify readers and the code that starts and stops watchers keep going while one
+runs, so a slow hook cannot stall watch bookkeeping or back the kernel's event queue up
+behind it.
+
+The queue is bounded. A hook that never keeps up eventually costs events, and Kowl says
+so rather than blocking the readers and letting the kernel drop them where nobody can
+see it happen. If you see `hooks cannot keep up`, the hook is too slow for the rate of
+change, not the other way round.
+
 ### Debouncing and self-triggering
 
 One save from an editor usually produces several write events. Kowl collapses write,
