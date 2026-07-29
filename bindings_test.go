@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,5 +239,87 @@ func TestKExecReportsTruncatedOutput(t *testing.T) {
 	}
 	if want := "64|true"; got != want {
 		t.Fatalf("kExec truncation = %q, want %q", got, want)
+	}
+}
+
+func TestKCliPerformsARequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "%s %s %s", r.Method, r.URL.Path, r.Header.Get("Client"))
+	}))
+	defer server.Close()
+
+	value := evalJS(t, `
+		kCli.URL(`+quote(server.URL)+`)
+		var req = kCli.Request()
+		req.Path("/headers")
+		req.SetHeader("Client", "kowl")
+		var res = req.Send()
+		res[0].StatusCode + " " + res[0].String()`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "200 GET /headers kowl"; got != want {
+		t.Fatalf("kCli response = %q, want %q", got, want)
+	}
+}
+
+func TestKCliPostsAJSONBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		fmt.Fprintf(w, "%s %s", r.Method, body)
+	}))
+	defer server.Close()
+
+	value := evalJS(t, `
+		kCli.URL(`+quote(server.URL)+`)
+		var req = kCli.Request()
+		req.Method("POST")
+		req.Use(kBodyJSON({"foo": "bar"}))
+		var res = req.Send()
+		res[0].String()`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(got, "POST ") || !strings.Contains(got, `"foo"`) {
+		t.Fatalf("kCli POST echoed %q, want the JSON body", got)
+	}
+}
+
+// A server that never answers must not hold the hook past --http-timeout.
+func TestKCliHonoursTheHTTPTimeout(t *testing.T) {
+	block := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	defer server.Close()
+	defer close(block)
+
+	cfg := defaultVMConfig()
+	cfg.httpTimeout = 150 * time.Millisecond
+	vm := newVM(cfg)
+
+	start := time.Now()
+	value, err := vm.Run(`
+		kCli.URL(` + quote(server.URL) + `)
+		var res = kCli.Request().Send()
+		res[1] === null ? "no error" : "error"`)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("running script: %v", err)
+	}
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "error" {
+		t.Fatalf("Send() reported %q for a request that timed out, want an error", got)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Send() took %s, so --http-timeout did not apply", elapsed)
 	}
 }
