@@ -83,18 +83,43 @@ of them or does not parse.
 
 | Hook | When it runs |
 | --- | --- |
-| `exist(name, op, args)` | a watched path was found and a watcher was attached to it |
-| `create(name, op, args)` | a file was created |
-| `write(name, op, args)` | a file was written |
-| `remove(name, op, args)` | a file was removed |
-| `rename(name, op, args)` | a file was renamed |
-| `chmod(name, op, args)` | a file's mode changed |
-| `ticker(name, op, args)` | polling found the path, once per `-m` interval |
-| `not_found(name, op, args)` | polling found nothing matching the pattern |
+| `exist(name, op, event)` | a watched path was found and a watcher was attached to it |
+| `create(name, op, event)` | a file was created |
+| `write(name, op, event)` | a file was written |
+| `remove(name, op, event)` | a file was removed |
+| `rename(name, op, event)` | a file was renamed |
+| `chmod(name, op, event)` | a file's mode changed |
+| `ticker(name, op, event)` | polling found the path, once per `-m` interval |
+| `not_found(name, op, event)` | polling found nothing matching the pattern |
 
 Every hook receives the same three arguments: `name` is the path the event is about,
-`op` is the operation in uppercase (`WRITE`, `NOT_FOUND`, …), and `args` is the argument
-list Kowl itself was started with. See `example.js`.
+`op` is the operation in uppercase (`WRITE`, `NOT_FOUND`, …), and `event` describes the
+path as it stands when the hook runs:
+
+| Field | |
+| --- | --- |
+| `event.path` | the full path, same as `name` |
+| `event.op` | the operation, same as `op` |
+| `event.name` | the base name |
+| `event.dir` | the containing directory |
+| `event.exists` | whether the path is there right now |
+| `event.isDir` | whether it is a directory |
+| `event.size` | size in bytes, `0` when it is gone |
+| `event.modTime` | RFC 3339 timestamp, `""` when it is gone |
+
+On a `REMOVE`, or when a rename beat the hook to it, the path is already gone by the
+time the hook runs; `event.exists` is what says whether the rest of the fields mean
+anything.
+
+```js
+function write(name, op, event) {
+    if (event.size > 1024 * 1024) {
+        console.log(event.name, "is getting large")
+    }
+}
+```
+
+See `example.js`. `kArgs` still holds the arguments Kowl itself was started with.
 
 Hooks never run concurrently, so a script can keep state in ordinary globals. The VM is
 kept between events and reloaded when the script file changes, which means edits take

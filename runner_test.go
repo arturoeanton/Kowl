@@ -311,3 +311,70 @@ func readFile(t *testing.T, path string) string {
 func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, `\`, `\\`) + `"`
 }
+
+// The third hook argument used to be os.Args, which told a script nothing about the
+// event. It now describes the file the event is about.
+func TestRunPassesAnEventDescribingTheFile(t *testing.T) {
+	dir := t.TempDir()
+	observed := filepath.Join(dir, "observed.txt")
+	out := filepath.Join(dir, "out.txt")
+	if err := os.WriteFile(observed, []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := writeScript(t, `
+		function write(name, op, event) {
+			kStringToFile([
+				event.path, event.op, event.name, event.dir,
+				event.exists, event.isDir, event.size,
+				event.modTime === "" ? "no-time" : "has-time"
+			].join("|"), `+quote(out)+`)
+		}`)
+
+	if err := NewRunner(script).Run("WRITE", observed); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := strings.Join([]string{
+		observed, "WRITE", "observed.txt", dir, "true", "false", "5", "has-time",
+	}, "|")
+	if got := readFile(t, out); got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+}
+
+// On a REMOVE the path is already gone, so exists says the other fields mean nothing.
+func TestRunEventReportsAMissingPath(t *testing.T) {
+	dir := t.TempDir()
+	gone := filepath.Join(dir, "gone.txt")
+	out := filepath.Join(dir, "out.txt")
+
+	script := writeScript(t, `
+		function remove(name, op, event) {
+			kStringToFile(event.exists + "|" + event.size + "|" + event.name, `+quote(out)+`)
+		}`)
+
+	if err := NewRunner(script).Run("REMOVE", gone); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := readFile(t, out), "false|0|gone.txt"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+}
+
+func TestRunEventReportsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out.txt")
+
+	script := writeScript(t, `
+		function create(name, op, event) {
+			kStringToFile(event.isDir + "|" + event.exists, `+quote(out)+`)
+		}`)
+
+	if err := NewRunner(script).Run("CREATE", dir); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := readFile(t, out), "true|true"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+}

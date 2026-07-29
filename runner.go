@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -104,10 +105,38 @@ func (r *Runner) Run(op, name string) (err error) {
 		vm.Interrupt = nil
 	}()
 
-	if _, callErr := fn.Call(otto.NullValue(), name, op, os.Args); callErr != nil {
+	if _, callErr := fn.Call(otto.NullValue(), name, op, newHookEvent(op, name)); callErr != nil {
 		return fmt.Errorf("%s() failed: %w", hook, callErr)
 	}
 	return nil
+}
+
+// newHookEvent builds the third argument every hook receives. It used to be os.Args,
+// which told a script nothing it could act on; this describes the file the event is
+// about, as it stands at the moment the hook runs.
+//
+// The path may already be gone by then, on a REMOVE or a rename, so exists says whether
+// the rest of the fields mean anything.
+func newHookEvent(op, path string) map[string]interface{} {
+	event := map[string]interface{}{
+		"path":    path,
+		"op":      op,
+		"name":    filepath.Base(path),
+		"dir":     filepath.Dir(path),
+		"exists":  false,
+		"isDir":   false,
+		"size":    int64(0),
+		"modTime": "",
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return event
+	}
+	event["exists"] = true
+	event["isDir"] = info.IsDir()
+	event["size"] = info.Size()
+	event["modTime"] = info.ModTime().Format(time.RFC3339Nano)
+	return event
 }
 
 // DefinedHooks reports which of hookNames the script implements. It doubles as the
