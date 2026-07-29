@@ -1,0 +1,14 @@
+# The build only needs the sources. Everything else is context sent to the daemon for
+# nothing, and the git history is by far the largest part of it.
+.git
+.gitignore
+.dockerignore
+Dockerfile
+
+# Build output, in case someone built locally before building the image.
+/kowl
+/Kowl
+
+# Notes and docs the binary does not need.
+*.md
+!vendorjs/README.md

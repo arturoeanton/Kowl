@@ -1,7 +1,10 @@
 # Build and run Kowl in a container.
 #
 #   docker build -t kowl .
-#   docker run --rm -v "$PWD":/watch kowl -f /watch -r -j /watch/example.js
+#   docker run --rm -v "$PWD":/watch kowl -f /watch -r -x .git -j /watch/example.js
+#
+# Exclude .git, or a recursive watch spends most of its budget on paths nobody wants a
+# hook for: on this repository that is 93 watched paths instead of 4.
 #
 # Whether filesystem events cross a bind mount from a macOS or Windows host depends on
 # how Docker shares files: they do with virtiofs, and historically did not with gRPC-FUSE.

@@ -582,8 +582,11 @@ que no coincide con nada; respeta `-x` y sale cuando terminó el último hook.
 
 ```
 docker build -t kowl .
-docker run --rm -v "$PWD":/watch kowl -f /watch -r -j /watch/example.js
+docker run --rm -v "$PWD":/watch kowl -f /watch -r -x .git -j /watch/example.js
 ```
+
+Excluí `.git`, o un watch recursivo gasta casi todo su presupuesto en paths para los que
+nadie quiere un hook — en este repositorio, 93 paths vigilados en vez de 4.
 
 La imagen trae shell y certificados CA, porque un script puede invocar cualquier cosa con
 `kExec` y `kCli`. Que los eventos crucen un bind mount desde un host macOS o Windows
