@@ -578,6 +578,20 @@ lo bastante chico para un hook de pre-commit. `--once` hace una sola pasada, as�
 hooks que alcanza son `ticker` por cada path que coincide y `not_found` por cada patrón
 que no coincide con nada; respeta `-x` y sale cuando terminó el último hook.
 
+## Correr en un contenedor
+
+```
+docker build -t kowl .
+docker run --rm -v "$PWD":/watch kowl -f /watch -r -j /watch/example.js
+```
+
+La imagen trae shell y certificados CA, porque un script puede invocar cualquier cosa con
+`kExec` y `kCli`. Que los eventos crucen un bind mount desde un host macOS o Windows
+depende de cómo Docker comparte archivos — con virtiofs sí, y con gRPC-FUSE
+históricamente no. Si un cambio en el host nunca llega a un hook, es por eso, y el polling
+es la salida: `-m 2s` nota el cambio sin necesitar un evento. Lo mismo aplica a NFS y otros
+sistemas de archivos de red, que directamente no entregan eventos.
+
 ## Compilar y testear
 
 ```
@@ -602,6 +616,16 @@ La suite incluye tests sobre este archivo: cada helper `k` que se nombra acá ti
 existir, cada ejemplo de JavaScript tiene que parsear, cada link tiene que resolver, y el
 bloque de opciones de arriba tiene que coincidir con lo que imprime `kowl -h`. La
 documentación que se desactualiza rompe el build.
+
+No hay CI, así que el Makefile es la vara:
+
+```
+make verify          # gofmt, go vet, staticcheck, -race y cobertura
+make verify-linux    # lo mismo en un contenedor
+```
+
+`make verify-linux` importa porque fsnotify usa un backend distinto en cada plataforma:
+kqueue en macOS y los BSD, inotify en Linux. Que pase en uno no dice nada del otro.
 
 ## Notas y límites
 

@@ -572,6 +572,20 @@ and is small enough for a pre-commit hook. `--once` does a single pass, so the h
 reaches are `ticker` for each matching path and `not_found` for each pattern matching
 nothing; it honours `-x` and exits when the last hook has finished.
 
+## Running in a container
+
+```
+docker build -t kowl .
+docker run --rm -v "$PWD":/watch kowl -f /watch -r -j /watch/example.js
+```
+
+The image carries a shell and CA certificates, because a script can call anything through
+`kExec` and `kCli`. Whether events cross a bind mount from a macOS or Windows host depends
+on how Docker shares files — they do with virtiofs, and historically did not with
+gRPC-FUSE. If a change on the host never reaches a hook, that is why, and polling is the
+way around it: `-m 2s` notices the change without needing an event. The same applies to
+NFS and other network filesystems, which do not deliver events at all.
+
 ## Building and testing
 
 ```
@@ -595,6 +609,17 @@ go test -v -run TestEncrypt ./js
 The suite includes tests over this file: every `k` helper named here has to exist, every
 JavaScript example has to parse, every link has to resolve, and the options block above
 has to match what `kowl -h` prints. Documentation that drifts fails the build.
+
+There is no CI, so the Makefile is the bar:
+
+```
+make verify          # gofmt, go vet, staticcheck, -race and coverage
+make verify-linux    # the same in a container
+```
+
+`make verify-linux` matters because fsnotify uses a different backend on each platform:
+kqueue on macOS and the BSDs, inotify on Linux. Passing on one says nothing about the
+other.
 
 ## Notes and limits
 
