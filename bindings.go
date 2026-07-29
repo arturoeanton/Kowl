@@ -36,6 +36,8 @@ type vmConfig struct {
 	// writes collects the paths a hook changes through the helpers below, which is how
 	// Kowl knows an event is one a hook caused rather than a real change.
 	writes *writeLog
+	// hookTimeout bounds a whole hook, and so bounds how long kSleep may ask for.
+	hookTimeout time.Duration
 }
 
 func defaultVMConfig() vmConfig {
@@ -45,6 +47,7 @@ func defaultVMConfig() vmConfig {
 		maxOutput:   defaultMaxOutput,
 		logger:      NewLogger(os.Stderr, LevelInfo, FormatText),
 		writes:      &writeLog{},
+		hookTimeout: defaultHookTimeout,
 	}
 }
 
@@ -122,7 +125,8 @@ func newVM(cfg vmConfig) *otto.Otto {
 		"kGetegid":  os.Getegid,
 		"kArgs":     os.Args,
 
-		"kNow": time.Now,
+		"kNow":   time.Now,
+		"kSleep": bindSleep(cfg),
 
 		"kDebug": bindLog(cfg.logger.Debugf),
 		"kLog":   bindLog(cfg.logger.Infof),
@@ -334,6 +338,49 @@ func bind2Void(fn func(string, string) error) func(otto.FunctionCall) otto.Value
 		if err := fn(argString(call, 0, "argument 1"), argString(call, 1, "argument 2")); err != nil {
 			throwf(call.Otto, "%v", err)
 		}
+		return otto.UndefinedValue()
+	}
+}
+
+// bindSleep waits, for a duration string like "250ms" or a number of milliseconds.
+//
+// The wait counts against --hook-timeout and cannot exceed it. Asking for longer is
+// rejected outright rather than quietly shortened: a hook interrupted part way through
+// is worse than one that never started.
+func bindSleep(cfg vmConfig) func(otto.FunctionCall) otto.Value {
+	return func(call otto.FunctionCall) otto.Value {
+		arg := call.Argument(0)
+		if !arg.IsDefined() {
+			throwf(call.Otto, "kSleep: a duration is required")
+		}
+
+		var wait time.Duration
+		if arg.IsNumber() {
+			milliseconds, err := arg.ToFloat()
+			if err != nil {
+				throwf(call.Otto, "kSleep: %v", err)
+			}
+			wait = time.Duration(milliseconds * float64(time.Millisecond))
+		} else {
+			text, err := arg.ToString()
+			if err != nil {
+				throwf(call.Otto, "kSleep: %v", err)
+			}
+			parsed, err := time.ParseDuration(text)
+			if err != nil {
+				throwf(call.Otto, "kSleep: %v", err)
+			}
+			wait = parsed
+		}
+
+		switch {
+		case wait < 0:
+			throwf(call.Otto, "kSleep: %s is negative", wait)
+		case wait > cfg.hookTimeout:
+			throwf(call.Otto, "kSleep: %s is longer than the hook timeout of %s", wait, cfg.hookTimeout)
+		}
+
+		time.Sleep(wait)
 		return otto.UndefinedValue()
 	}
 }

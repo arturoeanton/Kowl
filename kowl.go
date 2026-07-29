@@ -169,6 +169,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		maxOutput:   opts.MaxOutput,
 		logger:      logger,
 		writes:      &writeLog{},
+		hookTimeout: opts.HookTimeout,
 	}
 
 	hooks, err := runner.DefinedHooks()

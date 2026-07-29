@@ -643,3 +643,59 @@ func TestKExecRejectsAnUnknownOption(t *testing.T) {
 func TestKExecRejectsANonObjectEnv(t *testing.T) {
 	evalJSError(t, `kExec("echo", "hi", {env: "LANG=C"})`)
 }
+
+func TestKSleepAcceptsADurationString(t *testing.T) {
+	start := time.Now()
+	evalJS(t, `kSleep("120ms")`)
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("kSleep(\"120ms\") returned after %s", elapsed)
+	}
+}
+
+func TestKSleepAcceptsMilliseconds(t *testing.T) {
+	start := time.Now()
+	evalJS(t, `kSleep(120)`)
+	if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+		t.Fatalf("kSleep(120) returned after %s", elapsed)
+	}
+}
+
+// A wait longer than the hook has left would be interrupted part way through, which is
+// worse than never starting it.
+func TestKSleepRefusesToOutlastTheHookTimeout(t *testing.T) {
+	cfg := defaultVMConfig()
+	cfg.hookTimeout = 100 * time.Millisecond
+	vm := newVM(cfg)
+
+	start := time.Now()
+	_, err := vm.Run(`kSleep("30s")`)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("kSleep accepted a wait longer than the hook timeout")
+	}
+	if !strings.Contains(err.Error(), "hook timeout") {
+		t.Fatalf("error %q does not explain the limit", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("kSleep waited %s before refusing", elapsed)
+	}
+}
+
+func TestKSleepRejectsBadArguments(t *testing.T) {
+	tests := []struct{ name, call string }{
+		{"missing", `kSleep()`},
+		{"negative", `kSleep(-5)`},
+		{"unparseable", `kSleep("soon")`},
+		{"no unit", `kSleep("500")`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evalJSError(t, tt.call)
+		})
+	}
+}
+
+func TestKSleepAcceptsZero(t *testing.T) {
+	evalJS(t, `kSleep(0)`)
+}

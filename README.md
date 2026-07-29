@@ -355,6 +355,19 @@ function write(name, op, event) {
 }
 ```
 
+#### kSleep
+
+> `kSleep(duration)`
+
+```js
+kSleep("250ms")   // a duration string
+kSleep(250)       // or a number of milliseconds
+```
+
+The wait counts against `--hook-timeout` and asking for longer than that is refused,
+rather than quietly shortened: a hook interrupted part way through is worse than one
+that never started. Hooks are serialised, so sleeping in one holds up the rest.
+
 #### Operating system
 
 > `kGetEnv` `kSetEnv` `kHostname` `kGetpid` `kGetppid` `kGetgid` `kGetuid` `kGetegid`
