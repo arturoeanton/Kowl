@@ -289,6 +289,13 @@ siguiente arranca desde un script recién cargado. El mismo límite cubre el niv
 del script, así que un loop entre las sentencias que están fuera de tus funciones se
 reporta en vez de colgar el proceso.
 
+La interrupción sólo actúa entre sentencias de JavaScript, así que no puede alcanzar a un
+hook que quedó adentro de uno de los helpers de más abajo — leyendo un fifo que nadie
+escribe, o un archivo en un montaje que dejó de responder. Unos segundos después del
+timeout, ese hook se **abandona**: Kowl lo dice y vuelve a atender eventos, pero el hook
+sigue por ahí y puede terminar más tarde. `kExec`, `kCli` y `kSleep` tienen sus propios
+límites y nunca llegan a esto.
+
 ## Cómo llegan los eventos a tus hooks
 
 ### Contrapresión

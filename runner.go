@@ -24,6 +24,37 @@ var hookNames = []string{"exist", "create", "write", "remove", "rename", "chmod"
 // errHookTimeout is what the watchdog interrupts a VM with.
 var errHookTimeout = errors.New("kowl: time is up")
 
+// abandonGrace is how long a call gets to unwind after the watchdog interrupts it.
+//
+// The interrupt only takes effect between JavaScript statements, so it cannot reach a
+// hook sitting inside a Go call: reading a fifo nobody writes to, or a file on a mount
+// that has stopped answering. Waiting for that forever stops every later event, so past
+// this grace the call is abandoned and Kowl carries on.
+const abandonGrace = 5 * time.Second
+
+// errAbandoned marks a call that outlasted even the grace period. The goroutine running
+// it is still out there, so whatever VM it holds must never be used again.
+var errAbandoned = errors.New("abandoned")
+
+// runBounded runs fn with the VM's interrupt armed, and stops waiting for it once the
+// grace period is up. It reports whether the call was abandoned rather than finished.
+func runBounded(vm *goja.Runtime, timeout time.Duration, fn func() error) (error, bool) {
+	stop := watchdog(vm, timeout)
+
+	done := make(chan error, 1)
+	go func() { done <- fn() }()
+
+	select {
+	case err := <-done:
+		stop()
+		return err, false
+	case <-time.After(timeout + abandonGrace):
+		// Deliberately not calling stop: the goroutine is still using this VM, and
+		// clearing its interrupt would take away the only thing that might yet end it.
+		return errAbandoned, true
+	}
+}
+
 // Runner owns the JavaScript side of Kowl: one JavaScript VM, the script loaded into it,
 // and the lock that keeps hooks from running concurrently.
 //
@@ -70,9 +101,12 @@ func (r *Runner) Run(op, name string) (written []string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Anything left from an earlier hook is not this one's doing.
-	r.config.writes.take()
-	defer func() { written = r.config.writes.take() }()
+	// Anything left from an earlier hook is not this one's doing. The log is captured
+	// here so that abandoning the hook can hand it a fresh one without this losing
+	// track of what it had already written.
+	writes := r.config.writes
+	writes.take()
+	defer func() { written = writes.take() }()
 
 	vm, err := r.ensureLoaded()
 	if err != nil {
@@ -85,20 +119,39 @@ func (r *Runner) Run(op, name string) (written []string, err error) {
 		return nil, fmt.Errorf("%s(): %w", hook, ErrHookNotDefined)
 	}
 
-	stop := watchdog(vm, r.timeout)
-	defer stop()
-
 	event := vm.ToValue(newHookEvent(op, name))
-	if _, callErr := fn(goja.Undefined(), vm.ToValue(name), vm.ToValue(op), event); callErr != nil {
-		if interrupted(callErr) {
-			// The VM was stopped part-way through a statement, so its state is no
-			// longer trustworthy. Drop it and load a fresh one for the next event.
-			r.discard()
-			return nil, fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
-		}
+	callErr, abandoned := runBounded(vm, r.timeout, func() error {
+		_, err := fn(goja.Undefined(), vm.ToValue(name), vm.ToValue(op), event)
+		return err
+	})
+
+	switch {
+	case abandoned:
+		// The hook is stuck somewhere Kowl cannot reach. Its goroutine keeps the VM and
+		// the write log it was filling; both are replaced so nothing it does later is
+		// attributed to the next hook.
+		r.config.writes = &writeLog{}
+		r.discard()
+		r.logger().Errorf("%s() is stuck after %s and was abandoned; it may still be running", hook, r.timeout)
+		return written, fmt.Errorf("%s() did not return within %s and was abandoned", hook, r.timeout)
+	case callErr != nil && interrupted(callErr):
+		// The VM was stopped part-way through a statement, so its state is no longer
+		// trustworthy. Drop it and load a fresh one for the next event.
+		r.discard()
+		return nil, fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
+	case callErr != nil:
 		return nil, fmt.Errorf("%s() failed: %w", hook, callErr)
 	}
 	return nil, nil
+}
+
+// logger is where the Runner reports something the caller cannot: a hook abandoned mid
+// flight is not a failure of this event so much as a warning about the next ones.
+func (r *Runner) logger() *Logger {
+	if r.config.logger != nil {
+		return r.config.logger
+	}
+	return NewLogger(os.Stderr, LevelError, FormatText)
 }
 
 // interrupted reports whether a failure is the watchdog stopping the VM rather than the
@@ -205,13 +258,16 @@ func (r *Runner) ensureLoaded() (*goja.Runtime, error) {
 // outside a function are code too: a loop among them used to hang Kowl with nothing
 // reported, at startup before any log line, and on reload while holding r.mu.
 func (r *Runner) evaluate(vm *goja.Runtime, code string) error {
-	stop := watchdog(vm, r.timeout)
-	defer stop()
-
-	if _, err := vm.RunString(code); err != nil {
-		if interrupted(err) {
-			return fmt.Errorf("loading %s: top level exceeded %s and was interrupted", r.scriptPath, r.timeout)
-		}
+	err, abandoned := runBounded(vm, r.timeout, func() error {
+		_, err := vm.RunString(code)
+		return err
+	})
+	switch {
+	case abandoned:
+		return fmt.Errorf("loading %s: top level did not return within %s and was abandoned", r.scriptPath, r.timeout)
+	case err != nil && interrupted(err):
+		return fmt.Errorf("loading %s: top level exceeded %s and was interrupted", r.scriptPath, r.timeout)
+	case err != nil:
 		return fmt.Errorf("loading %s: %w", r.scriptPath, err)
 	}
 	return nil

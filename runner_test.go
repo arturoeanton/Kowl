@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -612,5 +613,127 @@ func TestReloadReportsAScriptThatNoLongerParses(t *testing.T) {
 
 	if _, err := runner.Reload(); err == nil {
 		t.Fatal("Reload returned nil for a script that no longer parses")
+	}
+}
+
+// The interrupt only takes effect between JavaScript statements, so it cannot reach a
+// hook sitting inside a Go call. Waiting for one forever stopped every later event.
+func TestRunAbandonsAHookStuckOutsideJavaScript(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "nobody-writes-here")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create a fifo here: %v", err)
+	}
+
+	script := writeScript(t, `
+		function write(name, op) { kFileToString(`+quote(fifo)+`) }
+		function ticker(name, op) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	_, err := runner.Run("WRITE", "x")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Run returned nil for a hook stuck reading a fifo")
+	}
+	if !strings.Contains(err.Error(), "abandoned") {
+		t.Fatalf("error %q does not say the hook was abandoned", err)
+	}
+	if elapsed > runner.timeout+abandonGrace+3*time.Second {
+		t.Fatalf("Run took %s, so it was still waiting on the stuck hook", elapsed)
+	}
+
+	// The whole point: later events still work.
+	if _, err := runner.Run("TICKER", "x"); err != nil {
+		t.Fatalf("Run after abandoning a stuck hook: %v", err)
+	}
+}
+
+// A hook that spins in JavaScript is interrupted, not abandoned, so nothing is left
+// running behind it.
+func TestRunInterruptsRatherThanAbandonsAJavaScriptLoop(t *testing.T) {
+	script := writeScript(t, `function write(name, op) { while (true) {} }`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	_, err := runner.Run("WRITE", "x")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Run returned nil for a hook that never returns")
+	}
+	if strings.Contains(err.Error(), "abandoned") {
+		t.Fatalf("a JavaScript loop was abandoned rather than interrupted: %v", err)
+	}
+	// Interrupting is prompt; abandoning would have taken the grace period on top.
+	if elapsed >= runner.timeout+abandonGrace {
+		t.Fatalf("Run took %s, which means it waited for the grace period", elapsed)
+	}
+}
+
+// An abandoned hook keeps the write log it was filling, so anything it does afterwards
+// is not blamed on the next hook.
+func TestRunGivesAnAbandonedHookItsOwnWriteLog(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "nobody-writes-here")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create a fifo here: %v", err)
+	}
+	marker := filepath.Join(dir, "marker.txt")
+
+	script := writeScript(t, `
+		function write(name, op) {
+			kStringToFile("before", `+quote(marker)+`);
+			kFileToString(`+quote(fifo)+`);
+		}
+		function ticker(name, op) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	written, err := runner.Run("WRITE", "x")
+	if err == nil {
+		t.Fatal("expected the stuck hook to be abandoned")
+	}
+	// What it managed before getting stuck is still reported.
+	if len(written) != 1 || written[0] != marker {
+		t.Fatalf("written = %v, want %v", written, []string{marker})
+	}
+
+	// The next hook starts from an empty log.
+	next, err := runner.Run("TICKER", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("the next hook was credited with %v", next)
+	}
+}
+
+// The same trap sits in the script's top level.
+func TestDefinedHooksAbandonsATopLevelStuckOutsideJavaScript(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "nobody-writes-here")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("cannot create a fifo here: %v", err)
+	}
+
+	script := writeScript(t, `
+		kFileToString(`+quote(fifo)+`);
+		function write(name, op) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	_, err := runner.DefinedHooks()
+
+	if err == nil {
+		t.Fatal("DefinedHooks returned nil for a top level stuck reading a fifo")
+	}
+	if !strings.Contains(err.Error(), "abandoned") {
+		t.Fatalf("error %q does not say it was abandoned", err)
+	}
+	if elapsed := time.Since(start); elapsed > runner.timeout+abandonGrace+3*time.Second {
+		t.Fatalf("DefinedHooks took %s, so it was still waiting", elapsed)
 	}
 }

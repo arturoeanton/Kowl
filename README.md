@@ -286,6 +286,13 @@ next event starts from a freshly loaded script. The same limit covers the script
 level, so a loop among the statements outside your functions is reported rather than left
 to hang the process.
 
+The interrupt only takes effect between JavaScript statements, so it cannot reach a hook
+sitting inside one of the helpers below — reading a fifo nobody writes to, or a file on a
+mount that has stopped answering. A few seconds after the timeout such a hook is
+**abandoned**: Kowl says so and goes back to handling events, but the hook is still out
+there and may finish later. `kExec`, `kCli` and `kSleep` have their own limits and never
+reach this.
+
 ## How events reach your hooks
 
 ### Backpressure
