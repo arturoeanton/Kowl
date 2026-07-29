@@ -169,7 +169,7 @@ func TestSuperviseDispatchesExistThenWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, WatchConfig{Patterns: []string{file}, Interval: 10 * time.Millisecond, MaxWatches: 64}, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -201,7 +201,7 @@ func TestSuperviseRestartsObserverAfterDeleteAndRecreate(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, WatchConfig{Patterns: []string{file}, Interval: 10 * time.Millisecond, MaxWatches: 64}, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "initial EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -245,7 +245,7 @@ func TestSuperviseDoesNotLeakObserversAcrossCycles(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, WatchConfig{Patterns: []string{file}, Interval: 10 * time.Millisecond, MaxWatches: 64}, rec.dispatch, logs.logger())
 	}()
 
 	const cycles = 6
@@ -286,7 +286,7 @@ func TestSuperviseStopsAndReleasesObserverOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, WatchConfig{Patterns: []string{file}, Interval: 10 * time.Millisecond, MaxWatches: 64}, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -315,7 +315,7 @@ func TestSuperviseWaitsForFileToAppear(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.errorLogger())
+		Supervise(ctx, WatchConfig{Patterns: []string{file}, Interval: 10 * time.Millisecond, MaxWatches: 64}, rec.dispatch, logs.errorLogger())
 	}()
 
 	time.Sleep(100 * time.Millisecond)

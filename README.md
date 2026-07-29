@@ -23,12 +23,20 @@ Dependencies are pinned in `go.mod`; `go build` fetches them.
 ./kowl -f /tmp/foo -j example.js -m 0       # watcher only
 ./kowl -f 'logs/*.log' -f /etc/hosts -j example.js
 ./kowl -f ./config -j example.js            # a directory reports events for its files
+./kowl -f ./src -r -j example.js            # and the whole tree below it
 ```
 
 `-f` takes a file, a directory or a glob and may be repeated. Each matching path gets
 its own watcher, and new matches are picked up as they appear. Watching the containing
 directory is the reliable way to catch editors that save by writing a new file and
 renaming it over the old one.
+
+Watching a directory only reports its direct children, because fsnotify does not
+recurse. `-r` enumerates the tree instead and watches every directory in it, including
+subdirectories created later. Symlinks are not followed, so a link pointing back up the
+tree cannot loop. `--max-watches` caps how many paths are watched at once so a recursive
+watch over a large tree cannot exhaust the process's file descriptors; hitting it is
+reported once.
 
 Kowl runs until it is interrupted, and stops cleanly on Ctrl-C or SIGTERM. It exits `0`
 on a clean shutdown or `--help`, `1` when the script cannot be loaded, and `2` on a
@@ -47,6 +55,8 @@ Application Options:
   -m, --millisecond=    poll interval in milliseconds, 0 disables polling
                         (default: 1000)
   -w, --flagNotWatcher  disable the filesystem watcher, leaving only polling
+  -r, --recursive       watch every directory below a matched directory
+      --max-watches=    how many paths may be watched at once (default: 4096)
       --debounce=       quiet period before a burst of write events runs a
                         hook, 0 disables (default: 200ms)
       --self-trigger    let a hook that writes an observed file wake itself

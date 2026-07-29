@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -25,12 +27,37 @@ func ValidatePatterns(patterns []string) error {
 	return nil
 }
 
+// WatchConfig is what Supervise needs to know about the paths it is keeping watchers on.
+type WatchConfig struct {
+	// Patterns are the -f values: files, directories or globs.
+	Patterns []string
+	// Interval is how often the patterns are re-resolved.
+	Interval time.Duration
+	// Recursive expands a matched directory to the whole tree below it.
+	Recursive bool
+	// MaxWatches caps how many paths are watched at once, so a recursive watch over a
+	// large tree cannot exhaust the process's file descriptors.
+	MaxWatches int
+}
+
 // resolve returns the existing paths matched by the patterns, deduplicated and sorted.
 // A pattern with no wildcards resolves to itself when it exists, so plain filenames and
 // globs go through the same path.
-func resolve(patterns []string) []string {
+//
+// With recursive set, a matched directory also contributes every directory below it.
+// fsnotify does not recurse on its own, and watching a directory only reports its direct
+// children, so a tree has to be enumerated and watched a level at a time. Subdirectories
+// created later are picked up by the next resolve.
+func resolve(patterns []string, recursive bool) []string {
 	seen := make(map[string]bool)
 	var paths []string
+	add := func(path string) {
+		if !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
+		}
+	}
+
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -38,10 +65,26 @@ func resolve(patterns []string) []string {
 			continue
 		}
 		for _, match := range matches {
-			if !seen[match] {
-				seen[match] = true
-				paths = append(paths, match)
+			add(match)
+			if !recursive {
+				continue
 			}
+			info, err := os.Lstat(match)
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			// WalkDir does not follow symlinks, so a link pointing back up the tree
+			// cannot send this into a loop.
+			filepath.WalkDir(match, func(path string, entry fs.DirEntry, err error) error {
+				if err != nil {
+					// An unreadable subdirectory is skipped, not fatal.
+					return fs.SkipDir
+				}
+				if entry.IsDir() {
+					add(path)
+				}
+				return nil
+			})
 		}
 	}
 	sort.Strings(paths)
@@ -94,12 +137,14 @@ func (h *observerHandle) stop() {
 //
 // A path may be a directory, in which case fsnotify reports events for its children.
 // That is the reliable way to catch editors that save by writing a new file and
-// renaming it over the old one.
+// renaming it over the old one. fsnotify does not recurse, so WatchConfig.Recursive
+// enumerates the tree and watches each directory in it, picking up new subdirectories on
+// the next tick.
 //
 // EXIST is dispatched synchronously each time an observer is established, so it is
 // always ordered before any event that observer produces.
-func Supervise(ctx context.Context, patterns []string, interval time.Duration, dispatch Dispatch, logger *Logger) {
-	ticker := time.NewTicker(interval)
+func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *Logger) {
+	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
 
 	observers := make(map[string]*observerHandle)
@@ -110,12 +155,27 @@ func Supervise(ctx context.Context, patterns []string, interval time.Duration, d
 		}
 	}()
 
+	// capped remembers whether the watch limit was already reported, so hitting it does
+	// not repeat the same message every tick.
+	capped := false
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			present := resolve(patterns)
+			present := resolve(cfg.Patterns, cfg.Recursive)
+			if cfg.MaxWatches > 0 && len(present) > cfg.MaxWatches {
+				if !capped {
+					logger.Errorf("%d paths match but the limit is %d: watching the first %d, raise --max-watches to cover the rest",
+						len(present), cfg.MaxWatches, cfg.MaxWatches)
+					capped = true
+				}
+				present = present[:cfg.MaxWatches]
+			} else {
+				capped = false
+			}
+
 			stillThere := make(map[string]bool, len(present))
 			for _, path := range present {
 				stillThere[path] = true

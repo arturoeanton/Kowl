@@ -43,7 +43,7 @@ func TestEndToEndWatchAndDispatch(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		Supervise(ctx, []string{observed}, 10*time.Millisecond, events.Dispatch, logger)
+		Supervise(ctx, WatchConfig{Patterns: []string{observed}, Interval: 10 * time.Millisecond, MaxWatches: 64}, events.Dispatch, logger)
 	}()
 	go func() {
 		defer wg.Done()
@@ -111,7 +111,7 @@ func TestEndToEndHookRewritingTheObservedFileSettles(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, []string{observed}, 10*time.Millisecond, events.Dispatch, logger)
+		Supervise(ctx, WatchConfig{Patterns: []string{observed}, Interval: 10 * time.Millisecond, MaxWatches: 64}, events.Dispatch, logger)
 	}()
 
 	// The observer is only attached on the first supervisor tick; writing before that

@@ -188,3 +188,14 @@ func TestExampleScriptDefinesEveryKnownHook(t *testing.T) {
 		t.Fatalf("example.js defines %q, want %q", got, want)
 	}
 }
+
+func TestNonPositiveMaxWatchesIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "--max-watches", "0")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "--max-watches") {
+		t.Fatalf("stderr %q does not name the flag", stderr)
+	}
+}

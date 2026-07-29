@@ -32,6 +32,8 @@ type options struct {
 	Script         string        `short:"j" required:"true" long:"javascript" description:"JavaScript file holding the hooks"`
 	Millisecond    int           `short:"m" default:"1000" long:"millisecond" description:"poll interval in milliseconds, 0 disables polling"`
 	FlagNotWatcher bool          `short:"w" long:"flagNotWatcher" description:"disable the filesystem watcher, leaving only polling"`
+	Recursive      bool          `short:"r" long:"recursive" description:"watch every directory below a matched directory"`
+	MaxWatches     int           `long:"max-watches" default:"4096" description:"how many paths may be watched at once"`
 	Debounce       time.Duration `long:"debounce" default:"200ms" description:"quiet period before a burst of write events runs a hook, 0 disables"`
 	SelfTrigger    bool          `long:"self-trigger" description:"let a hook that writes an observed file wake itself again"`
 	HookTimeout    time.Duration `long:"hook-timeout" default:"30s" description:"how long a hook may run before it is interrupted"`
@@ -99,6 +101,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--max-output must be positive")
 		return exitUsage
 	}
+	if opts.MaxWatches <= 0 {
+		fmt.Fprintln(stderr, "--max-watches must be positive")
+		return exitUsage
+	}
 	if err := ValidatePatterns(opts.Filename); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
@@ -136,7 +142,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			Supervise(ctx, opts.Filename, supervisorInterval, events.Dispatch, logger)
+			Supervise(ctx, WatchConfig{
+				Patterns:   opts.Filename,
+				Interval:   supervisorInterval,
+				Recursive:  opts.Recursive,
+				MaxWatches: opts.MaxWatches,
+			}, events.Dispatch, logger)
 		}()
 	}
 	if opts.Millisecond > 0 {
