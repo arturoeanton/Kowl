@@ -276,3 +276,48 @@ func TestBinaryEmitsParseableJSONLogs(t *testing.T) {
 		t.Fatalf("the script's own line was not one of the JSON objects:\n%s", output.String())
 	}
 }
+
+// The startup check runs before anything is logged, so a runaway top level used to hang
+// the process with no output at all and no way to tell why.
+func TestBinaryRejectsARunawayScriptInsteadOfHanging(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "kowl")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("building kowl: %v\n%s", err, out)
+	}
+
+	observed := filepath.Join(dir, "observed.txt")
+	if err := os.WriteFile(observed, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, "while (true) {}\nfunction write(name, op) {}")
+
+	cmd := exec.Command(binary, "-f", observed, "-j", script, "--hook-timeout", "1s")
+	var output safeBuffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting kowl: %v", err)
+	}
+
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+
+	select {
+	case err := <-waited:
+		if err == nil {
+			t.Fatalf("kowl exited 0 for a script it could not load\n%s", output.String())
+		}
+	case <-time.After(20 * time.Second):
+		cmd.Process.Kill()
+		t.Fatalf("kowl hung on a script whose top level never finishes\n%s", output.String())
+	}
+
+	if !strings.Contains(output.String(), "top level") {
+		t.Fatalf("kowl did not say why it gave up:\n%s", output.String())
+	}
+}

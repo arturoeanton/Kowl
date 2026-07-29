@@ -135,7 +135,9 @@ kept between events and reloaded when the script file changes, which means edits
 effect without a restart and reset the globals.
 
 A hook that runs longer than `--hook-timeout` is interrupted and its VM discarded; the
-next event starts from a freshly loaded script.
+next event starts from a freshly loaded script. The same limit covers the script's top
+level, so a loop among the statements outside your functions is reported rather than
+left to hang.
 
 ### Debouncing and self-triggering
 

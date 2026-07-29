@@ -378,3 +378,84 @@ func TestRunEventReportsADirectory(t *testing.T) {
 		t.Fatalf("event = %q, want %q", got, want)
 	}
 }
+
+// Statements outside a function are code too. A loop among them used to hang Kowl
+// forever with nothing reported: --hook-timeout only covered the call into a hook.
+func TestRunInterruptsARunawayScriptTopLevel(t *testing.T) {
+	script := writeScript(t, `
+		while (true) {}
+		function write(name, op) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	err := runner.Run("WRITE", "x")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Run returned nil for a script whose top level never finishes")
+	}
+	if !strings.Contains(err.Error(), "top level") {
+		t.Fatalf("error %q does not say the top level was the problem", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Run took %s, so the watchdog did not interrupt the load", elapsed)
+	}
+}
+
+// The same load happens during the startup check, which runs before anything is logged.
+func TestDefinedHooksInterruptsARunawayScriptTopLevel(t *testing.T) {
+	script := writeScript(t, `while (true) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	_, err := runner.DefinedHooks()
+
+	if err == nil {
+		t.Fatal("DefinedHooks returned nil for a script whose top level never finishes")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("DefinedHooks took %s, so the watchdog did not interrupt the load", elapsed)
+	}
+}
+
+// An interrupted load must not leave a half-built VM behind for the next event.
+func TestRunRecoversAfterAnInterruptedLoad(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	script := writeScript(t, `
+		while (true) {}
+		function write(name, op) {}`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	if err := runner.Run("WRITE", "x"); err == nil {
+		t.Fatal("expected the runaway load to be interrupted")
+	}
+
+	rewriteScript(t, script, `function write(name, op) { kStringToFile("alive", `+quote(out)+`) }`)
+	if err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatalf("Run after an interrupted load: %v", err)
+	}
+	if got := readFile(t, out); got != "alive" {
+		t.Fatalf("hook wrote %q after an interrupted load, want %q", got, "alive")
+	}
+}
+
+// A slow but finite top level must not be cut short.
+func TestRunAllowsATopLevelThatFinishesInTime(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	script := writeScript(t, `
+		var total = 0
+		for (var i = 0; i < 20000; i++) { total = total + i }
+		function write(name, op) { kStringToFile(String(total), `+quote(out)+`) }`)
+	runner := NewRunner(script)
+	runner.timeout = 10 * time.Second
+
+	if err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := readFile(t, out); got != "199990000" {
+		t.Fatalf("top level computed %q, want %q", got, "199990000")
+	}
+}

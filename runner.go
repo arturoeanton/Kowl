@@ -92,18 +92,8 @@ func (r *Runner) Run(op, name string) (err error) {
 		err = fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
 	}()
 
-	interrupt := make(chan func(), 1)
-	vm.Interrupt = interrupt
-	watchdog := time.AfterFunc(r.timeout, func() {
-		select {
-		case interrupt <- func() { panic(hookTimeout{}) }:
-		default:
-		}
-	})
-	defer func() {
-		watchdog.Stop()
-		vm.Interrupt = nil
-	}()
+	stop := watchdog(vm, r.timeout)
+	defer stop()
 
 	if _, callErr := fn.Call(otto.NullValue(), name, op, newHookEvent(op, name)); callErr != nil {
 		return fmt.Errorf("%s() failed: %w", hook, callErr)
@@ -176,13 +166,56 @@ func (r *Runner) ensureLoaded() (*otto.Otto, error) {
 		return nil, fmt.Errorf("reading script: %w", err)
 	}
 	vm := newVM(r.config)
-	if _, err := vm.Run(string(code)); err != nil {
+	if err := r.evaluate(vm, string(code)); err != nil {
 		r.discard()
-		return nil, fmt.Errorf("loading %s: %w", r.scriptPath, err)
+		return nil, err
 	}
 
 	r.vm, r.loaded = vm, stamp
 	return vm, nil
+}
+
+// evaluate runs the script's top level under the same watchdog a hook gets. Statements
+// outside a function are code too: a loop among them used to hang Kowl with nothing
+// reported, at startup before any log line, and on reload while holding r.mu.
+func (r *Runner) evaluate(vm *otto.Otto, code string) (err error) {
+	defer func() {
+		caught := recover()
+		if caught == nil {
+			return
+		}
+		if _, ok := caught.(hookTimeout); !ok {
+			panic(caught)
+		}
+		err = fmt.Errorf("loading %s: top level exceeded %s and was interrupted", r.scriptPath, r.timeout)
+	}()
+
+	stop := watchdog(vm, r.timeout)
+	defer stop()
+
+	if _, err := vm.Run(code); err != nil {
+		return fmt.Errorf("loading %s: %w", r.scriptPath, err)
+	}
+	return nil
+}
+
+// watchdog arms vm.Interrupt so that work outlasting timeout is stopped. The returned
+// function disarms it and must be called before the VM is used again.
+func watchdog(vm *otto.Otto, timeout time.Duration) func() {
+	interrupt := make(chan func(), 1)
+	vm.Interrupt = interrupt
+	timer := time.AfterFunc(timeout, func() {
+		// Buffered and non-blocking, so the timer goroutine cannot outlive the call it
+		// was watching.
+		select {
+		case interrupt <- func() { panic(hookTimeout{}) }:
+		default:
+		}
+	})
+	return func() {
+		timer.Stop()
+		vm.Interrupt = nil
+	}
 }
 
 // discard forces the script to be reloaded on the next call. The caller must hold r.mu.
