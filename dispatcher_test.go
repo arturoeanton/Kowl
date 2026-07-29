@@ -592,3 +592,96 @@ func TestDispatchDoesNotSuppressAfterAHookDeletesThePath(t *testing.T) {
 		t.Fatalf("ran %d hooks, want 2: a recreated file was suppressed", got)
 	}
 }
+
+// A script that does not parse fails identically for every event. At a short poll
+// interval that was several identical lines a second, for as long as the process ran.
+func TestRepeatedFailureIsReportedOnceThenCounted(t *testing.T) {
+	logs := &safeBuffer{}
+	recorded := &calls{hook: func(op, name string) error { return errors.New("script is broken") }}
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo, FormatText), 0, false)
+	defer d.Close()
+
+	for i := 0; i < 50; i++ {
+		d.Dispatch("TICKER", "/tmp/observed")
+	}
+	d.idle(t)
+
+	if got := strings.Count(logs.String(), "script is broken"); got != 1 {
+		t.Fatalf("reported the same failure %d times for 50 events, want once:\n%s", got, logs.String())
+	}
+}
+
+// A different failure is worth reporting straight away.
+func TestADifferentFailureIsReportedImmediately(t *testing.T) {
+	logs := &safeBuffer{}
+	failure := errors.New("first problem")
+	recorded := &calls{hook: func(op, name string) error { return failure }}
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo, FormatText), 0, false)
+	defer d.Close()
+
+	d.Dispatch("TICKER", "/tmp/observed")
+	d.idle(t)
+
+	recorded.mu.Lock()
+	failure = errors.New("second problem")
+	recorded.mu.Unlock()
+
+	d.Dispatch("TICKER", "/tmp/observed")
+	d.idle(t)
+
+	for _, want := range []string{"first problem", "second problem"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("%q was not reported:\n%s", want, logs.String())
+		}
+	}
+}
+
+// Collapsing must not hide a failure that comes back after things recovered.
+func TestAFailureIsReportedAgainAfterASuccess(t *testing.T) {
+	logs := &safeBuffer{}
+	broken := true
+	recorded := &calls{hook: func(op, name string) error {
+		if broken {
+			return errors.New("script is broken")
+		}
+		return nil
+	}}
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo, FormatText), 0, false)
+	defer d.Close()
+
+	d.Dispatch("TICKER", "/tmp/observed")
+	d.idle(t)
+
+	recorded.mu.Lock()
+	broken = false
+	recorded.mu.Unlock()
+	d.Dispatch("TICKER", "/tmp/observed")
+	d.idle(t)
+
+	recorded.mu.Lock()
+	broken = true
+	recorded.mu.Unlock()
+	d.Dispatch("TICKER", "/tmp/observed")
+	d.idle(t)
+
+	if got := strings.Count(logs.String(), "script is broken"); got != 2 {
+		t.Fatalf("reported the returning failure %d times, want 2:\n%s", got, logs.String())
+	}
+}
+
+// The suppressed repeats are still visible when asked for.
+func TestSuppressedRepeatsAreLoggedAtDebug(t *testing.T) {
+	logs := &safeBuffer{}
+	recorded := &calls{hook: func(op, name string) error { return errors.New("script is broken") }}
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelDebug, FormatText), 0, false)
+	defer d.Close()
+
+	for i := 0; i < 5; i++ {
+		d.Dispatch("TICKER", "/tmp/observed")
+	}
+	d.idle(t)
+
+	if got := strings.Count(logs.String(), "script is broken"); got != 5 {
+		t.Fatalf("debug kept %d of 5 repeats:\n%s", got, logs.String())
+	}
+}

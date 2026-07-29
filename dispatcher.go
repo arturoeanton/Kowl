@@ -17,6 +17,11 @@ const selfTriggerSettle = 5 * time.Second
 // stuck one is noticed rather than buffered forever.
 const defaultQueueSize = 1024
 
+// failureRepeatWindow is how long the same failure is collapsed before it is reported
+// again, with a count. A script that does not parse fails for every event, which at a
+// short poll interval means several lines a second saying the same thing.
+const failureRepeatWindow = 10 * time.Second
+
 // debouncedOps are the operations an editor emits in bursts. A single save can produce
 // several of them, and running the hook on each one is both wasteful and racy: the
 // first WRITE often arrives while the file is still half written.
@@ -40,6 +45,10 @@ type dispatcher struct {
 	runMu sync.Mutex
 	// wrote maps a file to the state a hook last left it in.
 	wrote map[string]writeRecord
+	// lastFailure, repeats and failureAt collapse a failure that keeps happening.
+	lastFailure string
+	repeats     int
+	failureAt   time.Time
 
 	// queue hands events to the worker. Everything upstream — the fsnotify reader
 	// goroutines and the supervisor — only ever puts an event on it, so a slow hook
@@ -241,10 +250,11 @@ func (d *dispatcher) invoke(op, name string) {
 	switch {
 	case err == nil:
 		d.logger.Debugf("%s %s", op, name)
+		d.lastFailure = ""
 	case undefined:
 		d.logger.Debugf("%s %s: no hook defined", op, name)
 	default:
-		d.logger.Errorf("%s %s: %v", op, name, err)
+		d.reportFailure(op, name, err)
 	}
 
 	if d.selfTrigger || undefined {
@@ -270,6 +280,29 @@ func (d *dispatcher) invoke(op, name string) {
 		d.remember(name)
 	}
 	d.pruneWrites()
+}
+
+// reportFailure logs a hook failure, collapsing one that keeps repeating. A script that
+// does not parse fails identically for every event; saying so once and then counting is
+// more use than the same line several times a second. The caller must hold d.runMu.
+func (d *dispatcher) reportFailure(op, name string, err error) {
+	message := err.Error()
+	if message != d.lastFailure {
+		d.logger.Errorf("%s %s: %v", op, name, err)
+		d.lastFailure = message
+		d.failureAt = time.Now()
+		d.repeats = 0
+		return
+	}
+
+	d.repeats++
+	if time.Since(d.failureAt) < failureRepeatWindow {
+		d.logger.Debugf("%s %s: %v", op, name, err)
+		return
+	}
+	d.logger.Errorf("%s %s: %v (and %d more like it)", op, name, err, d.repeats)
+	d.failureAt = time.Now()
+	d.repeats = 0
 }
 
 // remember records the state a path was left in, so the event that change produces can
