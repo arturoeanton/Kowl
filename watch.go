@@ -64,24 +64,50 @@ type WatchConfig struct {
 	Exclude []string
 }
 
-// resolve returns the existing paths matched by the patterns, deduplicated and sorted.
-// A pattern with no wildcards resolves to itself when it exists, so plain filenames and
-// globs go through the same path.
+// resolved is what one pass over the patterns found.
+type resolved struct {
+	// Paths are the matching paths, deduplicated and sorted, at most the limit.
+	Paths []string
+	// FirstDropped is a path the limit kept out, as an example for the report.
+	FirstDropped string
+	// Truncated says the limit was reached and there was more to find.
+	Truncated bool
+}
+
+// resolve returns the existing paths matched by the patterns. A pattern with no
+// wildcards resolves to itself when it exists, so plain filenames and globs go through
+// the same path.
 //
 // With recursive set, a matched directory also contributes every directory below it.
 // fsnotify does not recurse on its own, and watching a directory only reports its direct
 // children, so a tree has to be enumerated and watched a level at a time. Subdirectories
 // created later are picked up by the next resolve.
-func resolve(patterns []string, recursive bool, exclude []string) []string {
+//
+// The search stops as soon as limit paths are in hand. Walking a whole tree only to
+// throw most of it away is not free: this runs once per tick, so an unbounded walk over
+// something like a home directory would cost a full traversal every second.
+func resolve(patterns []string, recursive bool, exclude []string, limit int) resolved {
+	result := resolved{}
 	seen := make(map[string]bool)
-	var paths []string
-	add := func(path string) {
-		if !seen[path] {
-			seen[path] = true
-			paths = append(paths, path)
+
+	// add reports whether there is room for more.
+	add := func(path string) bool {
+		if seen[path] {
+			return true
 		}
+		if limit > 0 && len(result.Paths) >= limit {
+			if result.FirstDropped == "" {
+				result.FirstDropped = path
+			}
+			result.Truncated = true
+			return false
+		}
+		seen[path] = true
+		result.Paths = append(result.Paths, path)
+		return true
 	}
 
+patterns:
 	for _, pattern := range patterns {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -92,7 +118,9 @@ func resolve(patterns []string, recursive bool, exclude []string) []string {
 			if excluded(exclude, match) {
 				continue
 			}
-			add(match)
+			if !add(match) {
+				break patterns
+			}
 			if !recursive {
 				continue
 			}
@@ -115,13 +143,18 @@ func resolve(patterns []string, recursive bool, exclude []string) []string {
 					// point of excluding a directory like node_modules.
 					return fs.SkipDir
 				}
-				add(path)
+				if !add(path) {
+					return fs.SkipAll
+				}
 				return nil
 			})
+			if result.Truncated {
+				break patterns
+			}
 		}
 	}
-	sort.Strings(paths)
-	return paths
+	sort.Strings(result.Paths)
+	return result
 }
 
 // Poll fires TICKER for every path a pattern currently matches, and NOT_FOUND for every
@@ -197,14 +230,14 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			present := resolve(cfg.Patterns, cfg.Recursive, cfg.Exclude)
-			if cfg.MaxWatches > 0 && len(present) > cfg.MaxWatches {
+			found := resolve(cfg.Patterns, cfg.Recursive, cfg.Exclude, cfg.MaxWatches)
+			present := found.Paths
+			if found.Truncated {
 				if !capped {
-					logger.Errorf("%d paths match but the limit is %d: watching the first %d, raise --max-watches to cover the rest",
-						len(present), cfg.MaxWatches, cfg.MaxWatches)
+					logger.Errorf("--max-watches limit of %d reached: %s and whatever follows it are not watched; raise the limit or narrow the patterns with -x",
+						cfg.MaxWatches, found.FirstDropped)
 					capped = true
 				}
-				present = present[:cfg.MaxWatches]
 			} else {
 				capped = false
 			}

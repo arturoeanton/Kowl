@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func TestResolveExpandsGlobsAndSkipsMissingPaths(t *testing.T) {
 		filepath.Join(dir, "*.log"),
 		filepath.Join(dir, "c.txt"),
 		filepath.Join(dir, "missing.txt"),
-	}, false, nil)
+	}, false, nil, 0).Paths
 
 	want := []string{
 		filepath.Join(dir, "a.log"),
@@ -81,7 +82,7 @@ func TestResolveDeduplicatesOverlappingPatterns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := resolve([]string{file, filepath.Join(dir, "*.log"), filepath.Join(dir, "a.*")}, false, nil)
+	got := resolve([]string{file, filepath.Join(dir, "*.log"), filepath.Join(dir, "a.*")}, false, nil, 0).Paths
 	if len(got) != 1 || got[0] != file {
 		t.Fatalf("resolve = %v, want exactly %v", got, []string{file})
 	}
@@ -276,7 +277,7 @@ func nestedTree(t *testing.T) string {
 func TestResolveWithoutRecursiveStopsAtTheDirectory(t *testing.T) {
 	root := nestedTree(t)
 
-	got := resolve([]string{root}, false, nil)
+	got := resolve([]string{root}, false, nil, 0).Paths
 
 	if len(got) != 1 || got[0] != root {
 		t.Fatalf("resolve = %v, want exactly %v", got, []string{root})
@@ -286,7 +287,7 @@ func TestResolveWithoutRecursiveStopsAtTheDirectory(t *testing.T) {
 func TestResolveRecursiveIncludesEverySubdirectory(t *testing.T) {
 	root := nestedTree(t)
 
-	got := resolve([]string{root}, true, nil)
+	got := resolve([]string{root}, true, nil, 0).Paths
 
 	want := []string{
 		root,
@@ -303,7 +304,7 @@ func TestResolveRecursiveIncludesEverySubdirectory(t *testing.T) {
 func TestResolveRecursiveDoesNotListFiles(t *testing.T) {
 	root := nestedTree(t)
 
-	for _, path := range resolve([]string{root}, true, nil) {
+	for _, path := range resolve([]string{root}, true, nil, 0).Paths {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
@@ -323,7 +324,7 @@ func TestResolveRecursiveDoesNotFollowSymlinks(t *testing.T) {
 	}
 
 	done := make(chan []string, 1)
-	go func() { done <- resolve([]string{root}, true, nil) }()
+	go func() { done <- resolve([]string{root}, true, nil, 0).Paths }()
 
 	select {
 	case got := <-done:
@@ -406,6 +407,64 @@ func TestSuperviseRecursivePicksUpNewSubdirectories(t *testing.T) {
 	<-done
 }
 
+// Walking a whole tree only to throw most of it away costs a full traversal per tick.
+func TestResolveStopsSearchingOnceTheLimitIsReached(t *testing.T) {
+	root := t.TempDir()
+	for i := 0; i < 20; i++ {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("sub%02d", i), "deep"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	found := resolve([]string{root}, true, nil, 5)
+
+	if len(found.Paths) != 5 {
+		t.Fatalf("resolve returned %d paths, want the limit of 5", len(found.Paths))
+	}
+	if !found.Truncated {
+		t.Fatal("Truncated is false even though the tree has far more than 5 directories")
+	}
+	if found.FirstDropped == "" {
+		t.Fatal("FirstDropped is empty, so the report cannot say where it stopped")
+	}
+	for _, path := range found.Paths {
+		if path == found.FirstDropped {
+			t.Fatalf("FirstDropped %q is also among the kept paths", found.FirstDropped)
+		}
+	}
+}
+
+// A limit that is never reached must not look like truncation.
+func TestResolveDoesNotReportTruncationWhenEverythingFits(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "one"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found := resolve([]string{root}, true, nil, 100)
+
+	if found.Truncated {
+		t.Fatal("Truncated is true for a tree that fits well inside the limit")
+	}
+	if found.FirstDropped != "" {
+		t.Fatalf("FirstDropped = %q for a tree that fits", found.FirstDropped)
+	}
+	if len(found.Paths) != 2 {
+		t.Fatalf("resolve returned %v, want the root and its one subdirectory", found.Paths)
+	}
+}
+
+// A zero limit means no limit, which is what the plain resolve tests rely on.
+func TestResolveWithoutALimitFindsEverything(t *testing.T) {
+	root := nestedTree(t)
+
+	found := resolve([]string{root}, true, nil, 0)
+
+	if found.Truncated || len(found.Paths) != 4 {
+		t.Fatalf("resolve = %v truncated=%v, want all four directories", found.Paths, found.Truncated)
+	}
+}
+
 // A recursive watch over a large tree must not be able to exhaust file descriptors.
 func TestSuperviseStopsAtMaxWatches(t *testing.T) {
 	root := t.TempDir()
@@ -437,6 +496,11 @@ func TestSuperviseStopsAtMaxWatches(t *testing.T) {
 
 	if got := rec.countOp("EXIST"); got > 3 {
 		t.Fatalf("watched %d paths, want at most the limit of 3", got)
+	}
+	// The report has to say where it stopped, or there is no way to tell what is
+	// going unwatched.
+	if !strings.Contains(logs.String(), root) {
+		t.Fatalf("the report does not name a path that was left out:\n%s", logs.String())
 	}
 
 	cancel()
@@ -495,7 +559,7 @@ func TestResolveSkipsExcludedMatches(t *testing.T) {
 		}
 	}
 
-	got := resolve([]string{filepath.Join(dir, "*")}, false, []string{"skip.log", "*.tmp"})
+	got := resolve([]string{filepath.Join(dir, "*")}, false, []string{"skip.log", "*.tmp"}, 0).Paths
 
 	if len(got) != 1 || filepath.Base(got[0]) != "keep.log" {
 		t.Fatalf("resolve = %v, want only keep.log", got)
@@ -514,7 +578,7 @@ func TestResolveDoesNotDescendIntoAnExcludedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := resolve([]string{root}, true, []string{"node_modules"})
+	got := resolve([]string{root}, true, []string{"node_modules"}, 0).Paths
 
 	want := []string{root, filepath.Join(root, "src")}
 	if strings.Join(got, ",") != strings.Join(want, ",") {

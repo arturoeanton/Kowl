@@ -45,8 +45,9 @@ Watching a directory only reports its direct children, because fsnotify does not
 recurse. `-r` enumerates the tree instead and watches every directory in it, including
 subdirectories created later. Symlinks are not followed, so a link pointing back up the
 tree cannot loop. `--max-watches` caps how many paths are watched at once so a recursive
-watch over a large tree cannot exhaust the process's file descriptors; hitting it is
-reported once.
+watch over a large tree cannot exhaust the process's file descriptors. The search stops
+as soon as the limit is reached rather than enumerating the whole tree and discarding
+most of it, and hitting the limit is reported once, naming a path that was left out.
 
 `kowl --version` prints the build and exits, without needing `-f` or `-j`.
 
