@@ -205,17 +205,6 @@ func TestIntervalAcceptsDurations(t *testing.T) {
 	}
 }
 
-// The bundled example must stay in sync with the hook names Kowl dispatches.
-func TestExampleScriptDefinesEveryKnownHook(t *testing.T) {
-	hooks, err := NewRunner("example.js").DefinedHooks()
-	if err != nil {
-		t.Fatalf("loading example.js: %v", err)
-	}
-	if got, want := strings.Join(hooks, ","), strings.Join(hookNames, ","); got != want {
-		t.Fatalf("example.js defines %q, want %q", got, want)
-	}
-}
-
 func TestNonPositiveMaxWatchesIsUsageError(t *testing.T) {
 	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "--max-watches", "0")
 

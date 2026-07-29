@@ -6,14 +6,10 @@ Filesystem events come from [fsnotify](https://github.com/fsnotify/fsnotify); th
 run on [goja](https://github.com/dop251/goja), an embedded ES2015+ interpreter. There is
 no Node.js, no npm and no `require` — one static binary and one `.js` file.
 
-Scripts are modern JavaScript: `let` and `const`, arrow functions, template literals,
-destructuring, spread, classes, `Map` and `Set`.
-
 *[Léeme en español](README.es.md)*
 
-[![asciicast](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf.svg)](https://asciinema.org/a/mju1Elcqn9O3cFVxklPQp55Tf)
-
 - [Quick start](#quick-start)
+- [What it is good for](#what-it-is-good-for)
 - [Choosing what to watch](#choosing-what-to-watch)
 - [Hooks](#hooks)
 - [How events reach your hooks](#how-events-reach-your-hooks)
@@ -41,12 +37,137 @@ function write(name, op, event) {
 Point Kowl at a file:
 
 ```
-$ ./kowl -f /tmp/notes.txt -j watch.js
-2026-07-29T10:15:04-03:00 info  watching /tmp/notes.txt with watch.js (hooks: write)
-2026-07-29T10:15:09-03:00 info  changed: notes.txt 12 bytes
+$ ./kowl -f notes.txt -j watch.js
+2026-07-29T13:00:28-03:00 info  watching notes.txt with watch.js (hooks: write)
+2026-07-29T13:00:30-03:00 info  changed: notes.txt 13 bytes
 ```
 
 Kowl runs until interrupted and stops cleanly on Ctrl-C or `SIGTERM`.
+
+## What it is good for
+
+The gap Kowl fills is between a shell one-liner and a daemon you have to write. A
+`while true; do ...; done` loop has no debouncing, no error handling and no logging; a
+purpose-built watcher in Go or Node is a project of its own. Kowl is a binary you drop
+next to a script.
+
+Every example below has been run as written.
+
+### Run something when a file is saved
+
+The obvious one — build, lint, test, reload. `--debounce` collapses the burst of events a
+single save produces, so this runs once per save rather than three times on a half-written
+file.
+
+```js
+function write(name, op, event) {
+    if (!event.name.endsWith(".txt")) return
+    const out = kExec("wc", "-l", event.path)
+    if (out.code !== 0) {
+        kError(`check failed: ${out.stderr.trim()}`)
+        return
+    }
+    kLog(`ok: ${out.stdout.trim()}`)
+}
+```
+
+```
+./kowl -f src -r -j build.js -m 0 --debounce 100ms
+```
+
+### Process files dropped into a directory
+
+The inbox pattern: something delivers files, you pick them up, act on them, move them
+away. `create` fires on arrival, and moving the file out through `kMoveFile` does not wake
+the hook again.
+
+```js
+function create(name, op, event) {
+    if (event.isDir || !event.name.endsWith(".csv")) return
+    kSleep("100ms")                                   // let the writer finish
+    const rows = kFileToString(event.path).trim().split("\n").length
+    kMoveFile(event.path, `${kGetEnv("DONE")}/${event.name}`)
+    kLog(`processed ${event.name}: ${rows} rows`)
+}
+```
+
+```
+DONE=./done ./kowl -f inbox -j inbox.js -m 0
+```
+
+### Watch for something that stopped happening
+
+`ticker` and `not_found` fire on the poll interval whether or not anything changed, which
+is what makes an absence detectable. This is a dead man's switch over a heartbeat file:
+noise-free while healthy, one line when it goes stale, one when it comes back.
+
+```js
+const STALE_MS = 60000
+let alerted = false
+
+function ticker(name, op, event) {
+    const age = Date.now() - new Date(event.modTime).getTime()
+    if (age > STALE_MS && !alerted) {
+        kError(`heartbeat is ${Math.round(age / 1000)}s old`)
+        alerted = true
+    } else if (age <= STALE_MS && alerted) {
+        kLog("heartbeat recovered")
+        alerted = false
+    }
+}
+
+function not_found(name, op, event) {
+    if (!alerted) {
+        kError("heartbeat file is missing")
+        alerted = true
+    }
+}
+```
+
+```
+./kowl -f /var/run/app.beat -j heartbeat.js -m 10s -w
+```
+
+### Reload a service when its configuration changes
+
+Validate first, and only signal the service if the new file is good — a watcher that
+reloads a broken config is worse than no watcher.
+
+```js
+function write(name, op, event) {
+    const check = kExec("nginx", "-t", "-c", event.path)
+    if (check.code !== 0) {
+        kError(`config rejected, not reloading: ${check.stderr.trim()}`)
+        return
+    }
+    kCopyFile(event.path, `${event.path}.good`)
+    kExec("systemctl", "reload", "nginx")
+    kLog("reloaded")
+}
+```
+
+### Send changes somewhere else
+
+`kCli` is an HTTP client, so a change can become a webhook, a metric or a message without
+shelling out to `curl`.
+
+```js
+function create(name, op, event) {
+    kCli.URL(kGetEnv("WEBHOOK"))
+    const req = kCli.Request()
+    req.Method("POST")
+    req.Use(kBodyJSON({file: event.name, size: event.size, at: event.modTime}))
+    const res = req.Send()
+    if (res.statusCode >= 300) {
+        kWarn(`webhook returned ${res.statusCode}`)
+    }
+}
+```
+
+Kowl is a poor fit when you need sub-millisecond reaction times, when the work per event
+is heavy enough to want real concurrency, or when you are already inside a runtime that
+watches files for you. It has no scheduler, no queue that survives a restart, and no
+clustering.
 
 ## Choosing what to watch
 
@@ -120,15 +241,7 @@ stands when the hook runs:
 On a `REMOVE`, or when a rename beat the hook to it, the path is already gone by the time
 the hook runs. `event.exists` is what says whether the rest of the fields mean anything.
 
-```js
-function write(name, op, event) {
-    if (event.size > 1024 * 1024) {
-        kWarn(event.name, "is getting large")
-    }
-}
-```
-
-See `example.js` for one of each.
+See `example.js` for one of each hook.
 
 ### Lifecycle
 
@@ -209,7 +322,7 @@ one yourself.
 > `kExec(name, ...args, [options]) -> {stdout, stderr, code, truncated}`
 
 ```js
-var out = kExec("ls", "-l")
+const out = kExec("ls", "-l")
 console.log(out.stdout)
 ```
 
@@ -217,13 +330,6 @@ A command that runs and exits non-zero is **not** an error: `code` holds the exi
 and `stdout` and `stderr` hold whatever it produced. Only a command that could not be run
 at all, or that outlived `--exec-timeout`, throws. Output beyond `--max-output` is dropped
 and `truncated` is set.
-
-```js
-var out = kExec("curl", "-s", "https://example.com")
-if (out.code !== 0) {
-    kError("curl failed:", out.stderr)
-}
-```
 
 A trailing object is options rather than another argument:
 
@@ -260,10 +366,9 @@ rather than null when nothing matches.
 
 ```js
 function write(name, op, event) {
-    var entries = kListDir(event.dir)
-    for (var i = 0; i < entries.length; i++) {
-        if (!entries[i].isDir && entries[i].size === 0) {
-            kWarn(entries[i].name, "is empty")
+    for (const entry of kListDir(event.dir)) {
+        if (!entry.isDir && entry.size === 0) {
+            kWarn(`${entry.name} is empty`)
         }
     }
 }
@@ -282,7 +387,7 @@ function write(name, op, event) {
 > `kDecrypt(passphrase, ciphertext) -> string`
 
 ```js
-var sealed = kEncrypt("passphrase", "plain text")
+const sealed = kEncrypt("passphrase", "plain text")
 console.log(kDecrypt("passphrase", sealed))
 ```
 
@@ -308,7 +413,7 @@ console.log("Body:", res.String())
 kCli.URL("http://httpbin.org/post")
 const req = kCli.Request()
 req.Method("POST")
-req.Use(kBodyJSON({"foo": "bar"}))
+req.Use(kBodyJSON({foo: "bar"}))
 console.log("Status:", req.Send().statusCode)
 ```
 
@@ -317,8 +422,8 @@ console.log("Status:", req.Send().statusCode)
 
 These are Go objects exposed directly. Their **fields** reach JavaScript in lower camel
 case — `res.statusCode`, not `res.StatusCode` — while their **methods** keep their Go
-names, so it is `res.String()` and `kCli.URL()`. The same rule produces the field names
-of `event`, `kStat` and `kExec`.
+names, so it is `res.String()` and `kCli.URL()`. The same rule produces the field names of
+`event`, `kStat` and `kExec`.
 
 ### Logging
 
@@ -357,8 +462,8 @@ console.log(kGetEnv("VAR"), kHostname(), kNow())
 [underscore](https://underscorejs.org) is available as `_`:
 
 ```js
-const stooges = [{name: 'moe', age: 40}, {name: 'larry', age: 50}]
-console.log(_.pluck(stooges, 'name'))
+const stooges = [{name: "moe", age: 40}, {name: "larry", age: 50}]
+console.log(_.pluck(stooges, "name"))
 ```
 
 It is vendored under `vendorjs/` and embedded in the binary. Most of what it offers is now
@@ -369,14 +474,15 @@ in the language itself, so new scripts rarely need it.
 Everything Kowl and its scripts report goes to **stderr**, timestamped and leveled:
 
 ```
-2026-07-29T10:15:04-03:00 info  watching /tmp/foo with watch.js (hooks: exist, write)
-2026-07-29T10:15:07-03:00 info  WRITE /tmp/foo 12 bytes
+2026-07-29T13:00:28-03:00 info  watching notes.txt with watch.js (hooks: write)
+2026-07-29T13:00:30-03:00 info  changed: notes.txt 13 bytes
+2026-07-29T13:00:32-03:00 info  stopped
 ```
 
 `--log-format json` writes one object per line instead, for a collector to pick up:
 
 ```json
-{"time":"2026-07-29T10:15:07-03:00","level":"info","message":"WRITE /tmp/foo 12 bytes"}
+{"time":"2026-07-29T13:00:30-03:00","level":"info","message":"changed: notes.txt 13 bytes"}
 ```
 
 A failure that keeps repeating — a script that no longer parses, say — is reported once
@@ -441,6 +547,10 @@ go test -short ./...           # skips the tests that build the binary
 go test -run TestDispatch .    # one group
 go test -v -run TestEncrypt ./js
 ```
+
+The suite includes tests over this file: every `k` helper named here has to exist, every
+JavaScript example has to parse, every link has to resolve, and the options block above
+has to match what `kowl -h` prints. Documentation that drifts fails the build.
 
 ## Notes and limits
 
