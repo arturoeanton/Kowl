@@ -62,6 +62,15 @@ func newVM(cfg vmConfig) *otto.Otto {
 		"kAppendFile":   bind2Void(js.AppendFile),
 		"kRemoveFile":   bind1Void(js.RemoveFile),
 
+		"kFileExists": js.Exists,
+		"kStat":       bindStat,
+		"kListDir":    bindListDir,
+		"kGlob":       bind1(js.Glob),
+		"kMkdirAll":   bind1Void(js.MkdirAll),
+		"kRemoveAll":  bind1Void(js.RemoveAll),
+		"kCopyFile":   bind2Void(js.CopyFile),
+		"kMoveFile":   bind2Void(js.MoveFile),
+
 		"kEncrypt": bind2(js.Encrypt),
 		"kDecrypt": bind2(js.Decrypt),
 
@@ -137,6 +146,42 @@ func describe(value otto.Value) string {
 		}
 	}
 	return value.String()
+}
+
+// bindStat and bindListDir convert their results by hand, so scripts see plain objects
+// with lowercase keys rather than wrapped Go values.
+
+func bindStat(call otto.FunctionCall) otto.Value {
+	stat, err := js.Stat(argString(call, 0, "kStat: path"))
+	if err != nil {
+		throwf(call.Otto, "%v", err)
+	}
+	return toValue(call.Otto, map[string]interface{}{
+		"path":    stat.Path,
+		"name":    stat.Name,
+		"dir":     stat.Dir,
+		"size":    stat.Size,
+		"mode":    stat.Mode,
+		"modTime": stat.ModTime.Format(time.RFC3339Nano),
+		"isDir":   stat.IsDir,
+	})
+}
+
+func bindListDir(call otto.FunctionCall) otto.Value {
+	entries, err := js.ListDir(argString(call, 0, "kListDir: path"))
+	if err != nil {
+		throwf(call.Otto, "%v", err)
+	}
+	listed := make([]map[string]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		listed = append(listed, map[string]interface{}{
+			"name":  entry.Name,
+			"path":  entry.Path,
+			"size":  entry.Size,
+			"isDir": entry.IsDir,
+		})
+	}
+	return toValue(call.Otto, listed)
 }
 
 func bindExec(cfg vmConfig) func(otto.FunctionCall) otto.Value {

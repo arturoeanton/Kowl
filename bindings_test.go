@@ -415,3 +415,168 @@ func TestScriptLoggingHandlesNoArguments(t *testing.T) {
 		t.Fatalf("console.log() produced %q, want an empty info line", got)
 	}
 }
+
+func TestKFileExistsReturnsABoolean(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "there.txt")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	value := evalJS(t, `
+		kFileExists(`+quote(file)+`) + "|" + kFileExists(`+quote(filepath.Join(dir, "missing"))+`)`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "true|false"; got != want {
+		t.Fatalf("kFileExists = %q, want %q", got, want)
+	}
+}
+
+func TestKStatReturnsAPlainObject(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(file, []byte("12345"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	value := evalJS(t, `
+		var s = kStat(`+quote(file)+`);
+		var fields = [s.name, s.dir, s.size, s.mode, s.isDir, s.modTime === "" ? "no-time" : "has-time"];
+		fields.join("|")`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{"data.txt", dir, "5", "0640", "false", "has-time"}, "|")
+	if got != want {
+		t.Fatalf("kStat = %q, want %q", got, want)
+	}
+}
+
+func TestKStatThrowsOnAMissingPath(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.txt")
+	err := evalJSError(t, `kStat(`+quote(missing)+`)`)
+	if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error %q does not name the path", err)
+	}
+}
+
+func TestKListDirReturnsAnArrayOfObjects(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("xx"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	value := evalJS(t, `
+		var entries = kListDir(`+quote(dir)+`)
+		entries.length + "|" + entries[0].name + "|" + entries[0].size + "|" +
+			entries[0].isDir + "|" + entries[1].name + "|" + entries[1].isDir`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "2|a.txt|2|false|sub|true"; got != want {
+		t.Fatalf("kListDir = %q, want %q", got, want)
+	}
+}
+
+// A script must be able to iterate the result with plain JavaScript.
+func TestKListDirResultIsIterable(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	value := evalJS(t, `
+		var names = []
+		var entries = kListDir(`+quote(dir)+`)
+		for (var i = 0; i < entries.length; i++) { names.push(entries[i].name) }
+		names.join(",")`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "a.txt,b.txt" {
+		t.Fatalf("iterated %q, want %q", got, "a.txt,b.txt")
+	}
+}
+
+func TestKGlobReturnsMatches(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.log", "b.log", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	value := evalJS(t, `kGlob(`+quote(filepath.Join(dir, "*.log"))+`).length`)
+	got, err := value.ToInteger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 2 {
+		t.Fatalf("kGlob matched %d paths, want 2", got)
+	}
+}
+
+func TestKMkdirAllAndKRemoveAll(t *testing.T) {
+	nested := filepath.Join(t.TempDir(), "a", "b", "c")
+
+	value := evalJS(t, `
+		kMkdirAll(`+quote(nested)+`)
+		var created = kFileExists(`+quote(nested)+`)
+		kRemoveAll(`+quote(filepath.Dir(filepath.Dir(nested)))+`)
+		created + "|" + kFileExists(`+quote(nested)+`)`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "true|false"; got != want {
+		t.Fatalf("kMkdirAll/kRemoveAll = %q, want %q", got, want)
+	}
+}
+
+func TestKCopyFileAndKMoveFile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.txt")
+	copied := filepath.Join(dir, "copied.txt")
+	moved := filepath.Join(dir, "moved.txt")
+	if err := os.WriteFile(source, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	value := evalJS(t, `
+		kCopyFile(`+quote(source)+`, `+quote(copied)+`);
+		kMoveFile(`+quote(copied)+`, `+quote(moved)+`);
+		var state = [
+			kFileExists(`+quote(source)+`),
+			kFileExists(`+quote(copied)+`),
+			kFileToString(`+quote(moved)+`)
+		];
+		state.join("|")`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "true|false|payload"; got != want {
+		t.Fatalf("copy then move = %q, want %q", got, want)
+	}
+}
+
+func TestKCopyFileThrowsOnAMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	evalJSError(t, `kCopyFile(`+quote(filepath.Join(dir, "missing"))+`, `+quote(filepath.Join(dir, "copy"))+`)`)
+}

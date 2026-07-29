@@ -197,6 +197,43 @@ Appends to the file, creating it if it does not exist.
 
 > `kRemoveFile(filename)`
 
+Reports an error when the file is not there. Use `kRemoveAll` for the forgiving version.
+
+#### Inspecting the filesystem
+
+> `kFileExists(path) -> boolean`
+> `kStat(path) -> {path, name, dir, size, mode, modTime, isDir}`
+> `kListDir(path) -> [{name, path, size, isDir}, ...]`
+> `kGlob(pattern) -> [path, ...]`
+
+`kStat` throws when the path is not there, so `kFileExists` is the way to ask without
+handling an exception. `kListDir` is sorted by name, and `kGlob` returns an empty array
+rather than null when nothing matches.
+
+```js
+function write(name, op, event) {
+    var entries = kListDir(event.dir)
+    for (var i = 0; i < entries.length; i++) {
+        if (!entries[i].isDir && entries[i].size === 0) {
+            kWarn(entries[i].name, "is empty")
+        }
+    }
+}
+```
+
+#### Changing the filesystem
+
+> `kMkdirAll(path)`
+> `kRemoveAll(path)`
+> `kCopyFile(source, destination)`
+> `kMoveFile(source, destination)`
+
+`kMkdirAll` creates every parent it needs and does not mind an existing directory.
+`kRemoveAll` deletes a whole tree and does not mind a path that was never there.
+`kCopyFile` preserves permissions and replaces the destination; its directory must
+already exist. `kMoveFile` renames, falling back to a copy when the two paths are on
+different filesystems.
+
 #### kEncrypt / kDecrypt
 
 > `kEncrypt(passphrase, plaintext) -> string`
