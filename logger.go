@@ -66,11 +66,8 @@ func (l *Logger) Infof(format string, args ...interface{}) { l.printf(LevelInfo,
 // Errorf reports a failure. Kowl keeps running after one.
 func (l *Logger) Errorf(format string, args ...interface{}) { l.printf(LevelError, format, args...) }
 
-// Enabled reports whether messages at level would be written.
-func (l *Logger) Enabled(level Level) bool { return level >= l.level }
-
 func (l *Logger) printf(level Level, format string, args ...interface{}) {
-	if !l.Enabled(level) {
+	if level < l.level {
 		return
 	}
 	message := fmt.Sprintf(format, args...)

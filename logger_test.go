@@ -56,16 +56,6 @@ func TestLoggerDropsMessagesBelowItsLevel(t *testing.T) {
 	}
 }
 
-func TestLoggerEnabled(t *testing.T) {
-	logger := NewLogger(&safeBuffer{}, LevelInfo)
-	if logger.Enabled(LevelDebug) {
-		t.Fatal("debug is enabled on an info logger")
-	}
-	if !logger.Enabled(LevelInfo) || !logger.Enabled(LevelError) {
-		t.Fatal("info or error is disabled on an info logger")
-	}
-}
-
 // Kowl logs from the watcher, the poller and debounce timers at once.
 func TestLoggerIsSafeForConcurrentUse(t *testing.T) {
 	out := &safeBuffer{}
