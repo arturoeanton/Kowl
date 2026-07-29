@@ -45,10 +45,8 @@ type dispatcher struct {
 	runMu sync.Mutex
 	// wrote maps a file to the state a hook last left it in.
 	wrote map[string]writeRecord
-	// lastFailure, repeats and failureAt collapse a failure that keeps happening.
-	lastFailure string
-	repeats     int
-	failureAt   time.Time
+	// failures collapses a hook failure that keeps happening.
+	failures *repeatFilter
 
 	// queue hands events to the worker. Everything upstream — the fsnotify reader
 	// goroutines and the supervisor — only ever puts an event on it, so a slow hook
@@ -96,6 +94,7 @@ func newDispatcherWithQueue(run func(op, name string) (
 		settle:      selfTriggerSettle,
 		selfTrigger: selfTrigger,
 		wrote:       make(map[string]writeRecord),
+		failures:    newRepeatFilter(failureRepeatWindow),
 		pending:     make(map[string]*debounceEntry),
 		queue:       make(chan queuedEvent, queueSize),
 	}
@@ -250,7 +249,7 @@ func (d *dispatcher) invoke(op, name string) {
 	switch {
 	case err == nil:
 		d.logger.Debugf("%s %s", op, name)
-		d.lastFailure = ""
+		d.failures.reset()
 	case undefined:
 		d.logger.Debugf("%s %s: no hook defined", op, name)
 	default:
@@ -284,25 +283,17 @@ func (d *dispatcher) invoke(op, name string) {
 
 // reportFailure logs a hook failure, collapsing one that keeps repeating. A script that
 // does not parse fails identically for every event; saying so once and then counting is
-// more use than the same line several times a second. The caller must hold d.runMu.
+// more use than the same line several times a second.
 func (d *dispatcher) reportFailure(op, name string, err error) {
-	message := err.Error()
-	if message != d.lastFailure {
-		d.logger.Errorf("%s %s: %v", op, name, err)
-		d.lastFailure = message
-		d.failureAt = time.Now()
-		d.repeats = 0
-		return
-	}
-
-	d.repeats++
-	if time.Since(d.failureAt) < failureRepeatWindow {
+	suppressed, report := d.failures.admit(err.Error())
+	switch {
+	case !report:
 		d.logger.Debugf("%s %s: %v", op, name, err)
-		return
+	case suppressed > 0:
+		d.logger.Errorf("%s %s: %v (and %d more like it)", op, name, err, suppressed)
+	default:
+		d.logger.Errorf("%s %s: %v", op, name, err)
 	}
-	d.logger.Errorf("%s %s: %v (and %d more like it)", op, name, err, d.repeats)
-	d.failureAt = time.Now()
-	d.repeats = 0
 }
 
 // remember records the state a path was left in, so the event that change produces can

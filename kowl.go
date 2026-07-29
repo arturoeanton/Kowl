@@ -142,6 +142,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "--max-watches must be positive")
 		return exitUsage
 	}
+	for _, pattern := range append(append([]string{}, opts.Filename...), opts.Exclude...) {
+		if strings.TrimSpace(pattern) == "" {
+			fmt.Fprintln(stderr, "an empty pattern matches nothing: give -f or -x a path")
+			return exitUsage
+		}
+	}
 	if err := ValidatePatterns(opts.Filename); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitUsage

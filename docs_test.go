@@ -102,7 +102,7 @@ func TestREADMEJavaScriptExamplesParse(t *testing.T) {
 // headingAnchor mimics how GitHub turns a heading into a fragment identifier.
 func headingAnchor(heading string) string {
 	anchor := strings.ToLower(strings.TrimSpace(heading))
-	anchor = regexp.MustCompile("[^\\p{L}\\p{N}\\s-]").ReplaceAllString(anchor, "")
+	anchor = regexp.MustCompile(`[^\p{L}\p{N}\s-]`).ReplaceAllString(anchor, "")
 	return strings.ReplaceAll(anchor, " ", "-")
 }
 

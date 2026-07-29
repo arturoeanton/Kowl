@@ -197,6 +197,12 @@ turns up; one with a separator is matched against the whole path, so `-x '/srv/a
 stays specific to that place. With `-r`, an excluded directory is not descended into at
 all — the difference between skipping `node_modules` and skipping only its top level.
 
+**Names that look like patterns.** A pattern is used as a glob first. If it matches
+nothing and a file with that exact name exists, that file is watched instead — the same
+thing a shell does with an unmatched glob. That is what makes `-f 'report[1].pdf'` work,
+which matters because it is how a browser names a second download. `-x` follows the same
+rule. An empty pattern is rejected rather than quietly matching nothing.
+
 **Limits.** `--max-watches` caps how many paths are watched at once, so a recursive watch
 over a large tree cannot exhaust the process's file descriptors. The search stops as soon
 as the limit is reached rather than enumerating the whole tree and discarding most of it,
@@ -485,8 +491,11 @@ Everything Kowl and its scripts report goes to **stderr**, timestamped and level
 {"time":"2026-07-29T13:00:30-03:00","level":"info","message":"changed: notes.txt 13 bytes"}
 ```
 
-A failure that keeps repeating — a script that no longer parses, say — is reported once
-and then counted, so it cannot bury everything else.
+A failure that keeps repeating is reported once and then counted, so it cannot bury
+everything else. That covers both a script that no longer parses, which fails on every
+event, and a path that cannot be watched, which fails on every tick — watching a home
+directory with `-r` reaches a permission-denied subdirectory within seconds. Kowl keeps
+retrying either way; it just stops narrating.
 
 **Signals.** `SIGINT` and `SIGTERM` shut down cleanly. `SIGHUP` reloads the script.
 

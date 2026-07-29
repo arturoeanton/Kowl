@@ -726,3 +726,205 @@ func TestObserverHandleDeadReportsWhetherItStopped(t *testing.T) {
 		t.Fatal("dead() is false for an observer that has stopped")
 	}
 }
+
+// --- names that look like globs ----------------------------------------------------
+
+// A browser names a second download report[1].pdf. Globbing turned that into a search
+// for report1.pdf, so the file sat there being reported as missing, forever and without
+// a word of explanation.
+func TestResolveFindsAFileWhoseNameLooksLikeAGlob(t *testing.T) {
+	dir := t.TempDir()
+	awkward := filepath.Join(dir, "report[1].pdf")
+	if err := os.WriteFile(awkward, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolve([]string{awkward}, false, nil, 0).Paths
+
+	if len(got) != 1 || got[0] != awkward {
+		t.Fatalf("resolve = %v, want exactly %v", got, []string{awkward})
+	}
+}
+
+func TestResolveHandlesOtherGlobMetacharactersInNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"star*name.txt", "question?.txt", "bracket[a-z].txt"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Skipf("the filesystem will not take %q: %v", name, err)
+		}
+		t.Run(name, func(t *testing.T) {
+			got := resolve([]string{path}, false, nil, 0).Paths
+			if len(got) != 1 || got[0] != path {
+				t.Fatalf("resolve = %v, want exactly %v", got, []string{path})
+			}
+		})
+	}
+}
+
+// A real glob must still glob: the literal fallback only applies when nothing matched.
+func TestResolvePrefersGlobMatchesOverTheLiteralPattern(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.log", "b.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := resolve([]string{filepath.Join(dir, "*.log")}, false, nil, 0).Paths
+
+	if len(got) != 2 {
+		t.Fatalf("resolve = %v, want both logs rather than the pattern itself", got)
+	}
+}
+
+// A pattern that matches nothing and names nothing is still nothing.
+func TestResolveReturnsNothingForAPatternThatNamesNoFile(t *testing.T) {
+	got := resolve([]string{filepath.Join(t.TempDir(), "nowhere[1].txt")}, false, nil, 0).Paths
+	if len(got) != 0 {
+		t.Fatalf("resolve = %v, want nothing", got)
+	}
+}
+
+// Exclusion has the same trap: -x 'report[1].pdf' matched report1.pdf and left the real
+// file watched.
+func TestExcludedCoversANameThatLooksLikeAGlob(t *testing.T) {
+	if !excluded([]string{"report[1].pdf"}, "/downloads/report[1].pdf") {
+		t.Fatal("a path was not excluded by a pattern equal to its own name")
+	}
+	// The glob reading still works.
+	if !excluded([]string{"report[1].pdf"}, "/downloads/report1.pdf") {
+		t.Fatal("the pattern stopped working as a glob")
+	}
+	if excluded([]string{"report[1].pdf"}, "/downloads/other.pdf") {
+		t.Fatal("an unrelated path was excluded")
+	}
+}
+
+// The whole way through: a file named like a glob is watched and its writes arrive.
+func TestSuperviseWatchesAFileWhoseNameLooksLikeAGlob(t *testing.T) {
+	dir := t.TempDir()
+	awkward := filepath.Join(dir, "report[1].pdf")
+	if err := os.WriteFile(awkward, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &pathRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &safeBuffer{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{awkward},
+			Interval:   10 * time.Millisecond,
+			MaxWatches: 64,
+		}, rec.dispatch, logs.logger())
+	}()
+
+	waitFor(t, 2*time.Second, "EXIST for the awkward name", func() bool {
+		return rec.has("EXIST report[1].pdf")
+	})
+
+	if err := os.WriteFile(awkward, []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 2*time.Second, "WRITE for the awkward name", func() bool {
+		return rec.has("WRITE report[1].pdf")
+	})
+
+	cancel()
+	<-done
+}
+
+// Polling must agree with the watcher rather than calling the file missing.
+func TestPollFindsAFileWhoseNameLooksLikeAGlob(t *testing.T) {
+	dir := t.TempDir()
+	awkward := filepath.Join(dir, "report[1].pdf")
+	if err := os.WriteFile(awkward, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &pathRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &safeBuffer{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Poll(ctx, []string{awkward}, 10*time.Millisecond, rec.dispatch, logs.logger())
+	}()
+
+	waitFor(t, 2*time.Second, "TICKER for the awkward name", func() bool {
+		return rec.has("TICKER report[1].pdf")
+	})
+	if rec.countOp("NOT_FOUND") > 0 {
+		t.Fatalf("a file that is there was reported missing (%s)", rec.all())
+	}
+
+	cancel()
+	<-done
+}
+
+// Watching a home directory with -r reaches a permission-denied subdirectory within
+// seconds. Reporting it on every tick filled the log for as long as the process lived.
+func TestSuperviseDoesNotFloodTheLogWithAnUnwatchablePath(t *testing.T) {
+	root := t.TempDir()
+	blocked := filepath.Join(root, "blocked")
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A path that resolve finds but observe cannot watch: one that vanishes between
+	// the two is the same case, and easier to arrange than permissions.
+	attempts := 0
+	var mu sync.Mutex
+	fake := func(ctx context.Context, path string, dispatch Dispatch, logger *Logger) (<-chan struct{}, error) {
+		if strings.HasSuffix(path, "blocked") {
+			mu.Lock()
+			attempts++
+			mu.Unlock()
+			return nil, fmt.Errorf("watching %s: permission denied", path)
+		}
+		done := make(chan struct{})
+		dispatch("EXIST", path)
+		go func() { <-ctx.Done(); close(done) }()
+		return done, nil
+	}
+
+	logs := &safeBuffer{}
+	rec := &pathRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{root},
+			Interval:   10 * time.Millisecond,
+			Recursive:  true,
+			MaxWatches: 64,
+			observe:    fake,
+		}, rec.dispatch, logs.errorLogger())
+	}()
+
+	// Let it retry many times.
+	waitFor(t, 3*time.Second, "several retries", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return attempts >= 20
+	})
+
+	cancel()
+	<-done
+
+	if got := strings.Count(logs.String(), "permission denied"); got != 1 {
+		t.Fatalf("reported the same unwatchable path %d times over %d attempts, want once:\n%s",
+			got, attempts, logs.String())
+	}
+	// It must still retry, so the path is picked up when the permission is fixed.
+	if attempts < 20 {
+		t.Fatalf("only %d attempts: it stopped retrying", attempts)
+	}
+}

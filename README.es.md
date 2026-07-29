@@ -199,6 +199,12 @@ contra el nombre base, así que `-x node_modules` cubre ese directorio esté don
 queda específico a ese lugar. Con `-r`, a un directorio excluido no se desciende en
 absoluto — la diferencia entre saltear `node_modules` y saltear sólo su primer nivel.
 
+**Nombres que parecen patrones.** Un patrón se usa primero como glob. Si no matchea nada
+y existe un archivo con ese nombre exacto, se observa ese archivo — lo mismo que hace una
+shell con un glob sin coincidencias. Eso es lo que hace que `-f 'report[1].pdf'` funcione,
+que importa porque así nombra un navegador la segunda descarga. `-x` sigue la misma regla.
+Un patrón vacío se rechaza en vez de matchear nada en silencio.
+
 **Límites.** `--max-watches` topea cuántos paths se observan a la vez, para que un watch
 recursivo sobre un árbol grande no pueda agotar los descriptores de archivo del proceso. La
 búsqueda corta apenas se alcanza el límite, en vez de enumerar el árbol entero y tirar casi
@@ -491,8 +497,11 @@ Todo lo que reportan Kowl y sus scripts va a **stderr**, con timestamp y nivel:
 {"time":"2026-07-29T13:00:30-03:00","level":"info","message":"cambió: notas.txt 13 bytes"}
 ```
 
-Un fallo que se repite — un script que dejó de parsear, digamos — se reporta una vez y
-después se cuenta, así no tapa todo lo demás.
+Un fallo que se repite se reporta una vez y después se cuenta, así no tapa todo lo demás.
+Eso cubre tanto un script que dejó de parsear, que falla en cada evento, como un path que
+no se puede observar, que falla en cada tick — observar un directorio home con `-r` llega
+a un subdirectorio sin permisos en segundos. Kowl sigue reintentando igual; sólo deja de
+narrarlo.
 
 **Señales.** `SIGINT` y `SIGTERM` apagan limpio. `SIGHUP` recarga el script.
 

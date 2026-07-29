@@ -14,6 +14,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// watchRetryWindow is how long a path that cannot be watched is retried quietly before
+// the failure is reported again, with a count.
+const watchRetryWindow = 30 * time.Second
+
 // Dispatch runs the hook for an operation on a path. It never fails: a Dispatch is
 // responsible for reporting its own errors so that one bad event cannot stop watching.
 type Dispatch func(op, name string)
@@ -35,6 +39,9 @@ func ValidatePatterns(patterns []string) error {
 // --exclude node_modules covers the directory wherever in the tree it turns up. One
 // with a separator is matched against the whole path, so --exclude '/srv/app/tmp/*'
 // stays specific to that place.
+//
+// A pattern that matches nothing as a glob still excludes a path it equals exactly, so
+// a name containing [ or * can be excluded by writing it out.
 func excluded(patterns []string, path string) bool {
 	base := filepath.Base(path)
 	for _, pattern := range patterns {
@@ -45,8 +52,33 @@ func excluded(patterns []string, path string) bool {
 		if matched, err := filepath.Match(pattern, subject); err == nil && matched {
 			return true
 		}
+		if pattern == subject {
+			return true
+		}
 	}
 	return false
+}
+
+// match resolves one pattern to the paths it names.
+//
+// filepath.Glob treats [, * and ? as metacharacters, so a file actually called
+// report[1].pdf — which is how a browser names a second download — would be searched for
+// as report1.pdf and reported missing while sitting right there. A pattern that matches
+// nothing is therefore retried as a literal path, the way a shell leaves an unmatched
+// glob alone.
+func match(pattern string) []string {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		// Rejected by ValidatePatterns at startup; nothing useful to do per tick.
+		return nil
+	}
+	if len(matches) > 0 {
+		return matches
+	}
+	if _, err := os.Lstat(pattern); err == nil {
+		return []string{pattern}
+	}
+	return nil
 }
 
 // WatchConfig is what Supervise needs to know about the paths it is keeping watchers on.
@@ -116,12 +148,7 @@ func resolve(patterns []string, recursive bool, exclude []string, limit int) res
 
 patterns:
 	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			// Rejected by ValidatePatterns at startup; nothing useful to do per tick.
-			continue
-		}
-		for _, match := range matches {
+		for _, match := range match(pattern) {
 			if excluded(exclude, match) {
 				continue
 			}
@@ -176,13 +203,13 @@ func Poll(ctx context.Context, patterns []string, interval time.Duration, dispat
 			return
 		case <-ticker.C:
 			for _, pattern := range patterns {
-				matches, err := filepath.Glob(pattern)
-				if err != nil || len(matches) == 0 {
+				matches := match(pattern)
+				if len(matches) == 0 {
 					dispatch("NOT_FOUND", pattern)
 					continue
 				}
-				for _, match := range matches {
-					dispatch("TICKER", match)
+				for _, path := range matches {
+					dispatch("TICKER", path)
 				}
 			}
 		}
@@ -247,6 +274,11 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 	// not repeat the same message every tick.
 	capped := false
 
+	// A path that cannot be watched fails again on every tick. Watching a home
+	// directory with -r reaches one within seconds: a permission-denied subdirectory
+	// alone would otherwise fill the log for as long as the process lives.
+	failures := newRepeatFilter(watchRetryWindow)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -296,10 +328,17 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 					// so the next tick retries, instead of keeping a live observer
 					// that watches nothing.
 					observerCancel()
-					logger.Errorf("%v (retrying)", err)
+					if suppressed, report := failures.admit(err.Error()); report {
+						if suppressed > 0 {
+							logger.Errorf("%v (retrying, and %d more attempts like it)", err, suppressed)
+						} else {
+							logger.Errorf("%v (retrying)", err)
+						}
+					}
 					continue
 				}
 				observers[path] = &observerHandle{cancel: observerCancel, done: done}
+				failures.reset()
 				logger.Debugf("watching %s", path)
 			}
 		}

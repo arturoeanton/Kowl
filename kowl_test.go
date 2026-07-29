@@ -369,3 +369,21 @@ func TestServeReloadsStopsWithItsContext(t *testing.T) {
 		t.Fatal("serveReloads did not return after its context was cancelled")
 	}
 }
+
+// An empty pattern matches nothing and reports the emptiness forever, which is never
+// what someone meant to ask for.
+func TestEmptyPatternIsUsageError(t *testing.T) {
+	for _, flag := range []string{"-f", "-x"} {
+		t.Run(flag, func(t *testing.T) {
+			args := []string{"-f", "/tmp/observed", "-j", "example.js", flag, ""}
+			code, _, stderr := invoke(t, args...)
+
+			if code != exitUsage {
+				t.Fatalf("%s '' exit code = %d, want %d", flag, code, exitUsage)
+			}
+			if !strings.Contains(stderr, "empty pattern") {
+				t.Fatalf("stderr %q does not explain the problem", stderr)
+			}
+		})
+	}
+}
