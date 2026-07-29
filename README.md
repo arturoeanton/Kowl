@@ -167,15 +167,22 @@ One save from an editor usually produces several write events. Kowl collapses wr
 create and chmod events over a quiet period so the hook runs once, after the file has
 settled. Use `--debounce 0` to run on every event instead.
 
-A hook that writes the file it was woken for would otherwise wake itself again. Kowl
-remembers the state a hook leaves a file in and ignores the next event while the file is
-still exactly in that state, so the loop below terminates on its own:
+A hook that writes a watched file would otherwise wake itself again, and two hooks that
+write each other's files would wake each other forever. Kowl records every path a hook
+changed through the helpers below and ignores the events those changes produce while the
+path is still exactly in the state the hook left it in, so the loop below terminates on
+its own:
 
 ```js
 function write(name, op, args) {
     kStringToFile("port=8080", name)
 }
 ```
+
+Writes made through `kExec` leave no such record. For the file the hook was woken for,
+Kowl falls back to comparing the file before and after, which cannot tell a hook's write
+apart from one someone else made during the same moment. Prefer the helpers where the
+distinction matters.
 
 Pass `--self-trigger` if a script really does want to react to its own writes.
 

@@ -16,17 +16,19 @@ type calls struct {
 	mu     sync.Mutex
 	events []string
 	hook   func(op, name string) error
+	// written is what the fake hook reports having changed through Kowl's helpers.
+	written []string
 }
 
-func (c *calls) run(op, name string) error {
+func (c *calls) run(op, name string) ([]string, error) {
 	c.mu.Lock()
 	c.events = append(c.events, op+" "+name)
-	hook := c.hook
+	hook, written := c.hook, c.written
 	c.mu.Unlock()
 	if hook != nil {
-		return hook(op, name)
+		return written, hook(op, name)
 	}
-	return nil
+	return written, nil
 }
 
 func (c *calls) count() int {
@@ -489,4 +491,104 @@ func TestCloseIsIdempotent(t *testing.T) {
 	d := newDispatcher((&calls{}).run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	d.Close()
 	d.Close()
+}
+
+// Suppression used to cover only the file the hook was woken for. A hook woken for one
+// file that writes another left that other file completely unprotected, so two watched
+// files could wake each other forever.
+func TestDispatchIgnoresEventsForAnyPathTheHookWrote(t *testing.T) {
+	dir := t.TempDir()
+	woken := filepath.Join(dir, "woken.txt")
+	other := filepath.Join(dir, "other.txt")
+	for _, path := range []string{woken, other} {
+		if err := os.WriteFile(path, []byte("start"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recorded := &calls{
+		written: []string{other},
+		hook: func(op, name string) error {
+			return os.WriteFile(other, []byte("written by the hook"), 0o644)
+		},
+	}
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
+	defer d.Close()
+
+	d.Dispatch("WRITE", woken)
+	d.idle(t)
+
+	// This is the event the hook's write to the other file produced.
+	d.Dispatch("WRITE", other)
+	d.idle(t)
+
+	if got := recorded.count(); got != 1 {
+		t.Fatalf("ran %d hooks, want 1: the two files are waking each other (%s)", got, recorded.all())
+	}
+}
+
+// A hook that does not exist cannot have written anything, so a change that happened
+// while Kowl looked for it belongs to whoever really made it.
+func TestDispatchDoesNotAttributeChangesToAnUndefinedHook(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "observed.txt")
+	if err := os.WriteFile(file, []byte("start"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded := &calls{hook: func(op, name string) error {
+		// Something else changes the file while Kowl is deciding there is no hook.
+		if err := os.WriteFile(file, []byte("changed by someone else"), 0o644); err != nil {
+			return err
+		}
+		return ErrHookNotDefined
+	}}
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
+	defer d.Close()
+
+	d.Dispatch("CHMOD", file)
+	d.idle(t)
+
+	recorded.mu.Lock()
+	recorded.hook = nil
+	recorded.mu.Unlock()
+
+	d.Dispatch("WRITE", file)
+	d.idle(t)
+
+	if got := recorded.count(); got != 2 {
+		t.Fatalf("ran %d hooks, want 2: a change was blamed on a hook that does not exist", got)
+	}
+}
+
+// A hook that deletes a path leaves no state to match a later event against.
+func TestDispatchDoesNotSuppressAfterAHookDeletesThePath(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "observed.txt")
+	if err := os.WriteFile(file, []byte("start"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded := &calls{
+		written: []string{file},
+		hook: func(op, name string) error {
+			os.Remove(file)
+			return nil
+		},
+	}
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
+	defer d.Close()
+
+	d.Dispatch("WRITE", file)
+	d.idle(t)
+
+	// The file comes back, which is a real change nobody should suppress.
+	if err := os.WriteFile(file, []byte("recreated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d.Dispatch("CREATE", file)
+	d.idle(t)
+
+	if got := recorded.count(); got != 2 {
+		t.Fatalf("ran %d hooks, want 2: a recreated file was suppressed", got)
+	}
 }

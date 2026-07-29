@@ -61,21 +61,29 @@ func NewRunner(scriptPath string) *Runner {
 // not_found(), and so on. Hooks are serialised, so a script never has two of its own
 // functions running at once and can keep state in ordinary globals.
 //
+// It returns the paths the hook changed through Kowl's own helpers, so the caller can
+// tell the events that follow apart from real changes. The list is returned even when
+// the hook fails: a hook that wrote a file and then threw still wrote the file.
+//
 // Every failure is returned rather than logged or fatal, so the caller decides what is
 // worth reporting and Kowl keeps watching when a single event goes wrong.
-func (r *Runner) Run(op, name string) (err error) {
+func (r *Runner) Run(op, name string) (written []string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Anything left from an earlier hook is not this one's doing.
+	r.config.writes.take()
+	defer func() { written = r.config.writes.take() }()
+
 	vm, err := r.ensureLoaded()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	hook := strings.ToLower(op)
 	fn, err := vm.Get(hook)
 	if err != nil || !fn.IsFunction() {
-		return fmt.Errorf("%s(): %w", hook, ErrHookNotDefined)
+		return nil, fmt.Errorf("%s(): %w", hook, ErrHookNotDefined)
 	}
 
 	defer func() {
@@ -96,9 +104,9 @@ func (r *Runner) Run(op, name string) (err error) {
 	defer stop()
 
 	if _, callErr := fn.Call(otto.NullValue(), name, op, newHookEvent(op, name)); callErr != nil {
-		return fmt.Errorf("%s() failed: %w", hook, callErr)
+		return nil, fmt.Errorf("%s() failed: %w", hook, callErr)
 	}
-	return nil
+	return nil, nil
 }
 
 // newHookEvent builds the third argument every hook receives. It used to be os.Args,

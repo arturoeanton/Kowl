@@ -26,7 +26,8 @@ var debouncedOps = map[string]bool{"WRITE": true, "CREATE": true, "CHMOD": true}
 // filesystem events, drops the events a hook caused by writing to the file it was
 // woken for, and reports whatever the hook fails at.
 type dispatcher struct {
-	run      func(op, name string) error
+	// run invokes the hook and reports the paths it changed through Kowl's helpers.
+	run      func(op, name string) (written []string, err error)
 	logger   *Logger
 	debounce time.Duration
 	settle   time.Duration
@@ -72,11 +73,13 @@ type debounceEntry struct {
 	deadline time.Time
 }
 
-func newDispatcher(run func(op, name string) error, logger *Logger, debounce time.Duration, selfTrigger bool) *dispatcher {
+func newDispatcher(run func(op, name string) (
+	[]string, error), logger *Logger, debounce time.Duration, selfTrigger bool) *dispatcher {
 	return newDispatcherWithQueue(run, logger, debounce, selfTrigger, defaultQueueSize)
 }
 
-func newDispatcherWithQueue(run func(op, name string) error, logger *Logger, debounce time.Duration, selfTrigger bool, queueSize int) *dispatcher {
+func newDispatcherWithQueue(run func(op, name string) (
+	[]string, error), logger *Logger, debounce time.Duration, selfTrigger bool, queueSize int) *dispatcher {
 	d := &dispatcher{
 		run:         run,
 		logger:      logger,
@@ -233,30 +236,53 @@ func (d *dispatcher) invoke(op, name string) {
 
 	before, hadBefore := stampOf(name)
 
-	err := d.run(op, name)
+	written, err := d.run(op, name)
+	undefined := errors.Is(err, ErrHookNotDefined)
 	switch {
 	case err == nil:
 		d.logger.Debugf("%s %s", op, name)
-	case errors.Is(err, ErrHookNotDefined):
+	case undefined:
 		d.logger.Debugf("%s %s: no hook defined", op, name)
 	default:
 		d.logger.Errorf("%s %s: %v", op, name, err)
 	}
 
-	if d.selfTrigger {
+	if d.selfTrigger || undefined {
+		// A hook that does not exist cannot have written anything, so there is nothing
+		// to attribute to it.
 		return
 	}
+
+	// Every path the hook changed through a helper, exactly. This covers a hook woken
+	// for one file that writes another: without it the two wake each other forever.
+	for _, path := range written {
+		d.remember(path)
+	}
+
+	// The file the hook was woken for may also have changed through kExec, which leaves
+	// no record. Compare it, accepting that a change made by something else during the
+	// hook looks the same from here.
 	after, hasAfter := stampOf(name)
-	if !hasAfter {
+	switch {
+	case !hasAfter:
 		delete(d.wrote, name)
-		return
+	case !hadBefore || before != after:
+		d.remember(name)
 	}
-	if hadBefore && before == after {
-		return
-	}
-	d.wrote[name] = writeRecord{stamp: after, at: time.Now()}
 	d.pruneWrites()
-	d.logger.Debugf("%s() changed %s, ignoring the events it caused", op, name)
+}
+
+// remember records the state a path was left in, so the event that change produces can
+// be recognised as the hook's own. The caller must hold d.runMu.
+func (d *dispatcher) remember(path string) {
+	stamp, exists := stampOf(path)
+	if !exists {
+		// The hook deleted it; there is no state to match a later event against.
+		delete(d.wrote, path)
+		return
+	}
+	d.wrote[path] = writeRecord{stamp: stamp, at: time.Now()}
+	d.logger.Debugf("a hook changed %s, ignoring the events it caused", path)
 }
 
 // causedByLastHook reports whether the file is byte-for-byte in the state a hook left

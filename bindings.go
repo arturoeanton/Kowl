@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robertkrimen/otto"
@@ -32,6 +33,9 @@ type vmConfig struct {
 	// logger receives everything a script logs. Script output goes through the same
 	// leveled, timestamped stream as Kowl's own, so --log-level governs both.
 	logger *Logger
+	// writes collects the paths a hook changes through the helpers below, which is how
+	// Kowl knows an event is one a hook caused rather than a real change.
+	writes *writeLog
 }
 
 func defaultVMConfig() vmConfig {
@@ -40,7 +44,36 @@ func defaultVMConfig() vmConfig {
 		httpTimeout: defaultHTTPTimeout,
 		maxOutput:   defaultMaxOutput,
 		logger:      NewLogger(os.Stderr, LevelInfo, FormatText),
+		writes:      &writeLog{},
 	}
+}
+
+// writeLog collects the paths a hook changed through Kowl's own helpers. Guessing from
+// timestamps cannot tell a hook's write apart from someone else's; this can.
+type writeLog struct {
+	mu    sync.Mutex
+	paths []string
+}
+
+func (w *writeLog) add(path string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.paths = append(w.paths, path)
+}
+
+// take returns everything recorded since the last call and starts over.
+func (w *writeLog) take() []string {
+	if w == nil {
+		return nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	paths := w.paths
+	w.paths = nil
+	return paths
 }
 
 // newVM builds an otto VM with every k* binding installed.
@@ -58,18 +91,18 @@ func newVM(cfg vmConfig) *otto.Otto {
 		"kExec": bindExec(cfg),
 
 		"kFileToString": bind1(js.ReadFile),
-		"kStringToFile": bind2Void(js.WriteFile),
-		"kAppendFile":   bind2Void(js.AppendFile),
-		"kRemoveFile":   bind1Void(js.RemoveFile),
+		"kStringToFile": recording2(cfg.writes, js.WriteFile),
+		"kAppendFile":   recording2(cfg.writes, js.AppendFile),
+		"kRemoveFile":   recording1(cfg.writes, js.RemoveFile),
 
 		"kFileExists": js.Exists,
 		"kStat":       bindStat,
 		"kListDir":    bindListDir,
 		"kGlob":       bind1(js.Glob),
-		"kMkdirAll":   bind1Void(js.MkdirAll),
-		"kRemoveAll":  bind1Void(js.RemoveAll),
-		"kCopyFile":   bind2Void(js.CopyFile),
-		"kMoveFile":   bind2Void(js.MoveFile),
+		"kMkdirAll":   recording1(cfg.writes, js.MkdirAll),
+		"kRemoveAll":  recording1(cfg.writes, js.RemoveAll),
+		"kCopyFile":   recordingBoth(cfg.writes, js.CopyFile),
+		"kMoveFile":   recordingBoth(cfg.writes, js.MoveFile),
 
 		"kEncrypt": bind2(js.Encrypt),
 		"kDecrypt": bind2(js.Decrypt),
@@ -299,6 +332,46 @@ func bind1Void(fn func(string) error) func(otto.FunctionCall) otto.Value {
 func bind2Void(fn func(string, string) error) func(otto.FunctionCall) otto.Value {
 	return func(call otto.FunctionCall) otto.Value {
 		if err := fn(argString(call, 0, "argument 1"), argString(call, 1, "argument 2")); err != nil {
+			throwf(call.Otto, "%v", err)
+		}
+		return otto.UndefinedValue()
+	}
+}
+
+// recording1, recording2 and recordingBoth wrap the helpers that change the filesystem,
+// noting which paths they touched. recording2 takes (value, path); recordingBoth records
+// both the source and the destination, since either may be watched.
+
+func recording1(writes *writeLog, fn func(string) error) func(otto.FunctionCall) otto.Value {
+	return func(call otto.FunctionCall) otto.Value {
+		path := argString(call, 0, "argument 1")
+		writes.add(path)
+		if err := fn(path); err != nil {
+			throwf(call.Otto, "%v", err)
+		}
+		return otto.UndefinedValue()
+	}
+}
+
+func recording2(writes *writeLog, fn func(string, string) error) func(otto.FunctionCall) otto.Value {
+	return func(call otto.FunctionCall) otto.Value {
+		value := argString(call, 0, "argument 1")
+		path := argString(call, 1, "argument 2")
+		writes.add(path)
+		if err := fn(value, path); err != nil {
+			throwf(call.Otto, "%v", err)
+		}
+		return otto.UndefinedValue()
+	}
+}
+
+func recordingBoth(writes *writeLog, fn func(string, string) error) func(otto.FunctionCall) otto.Value {
+	return func(call otto.FunctionCall) otto.Value {
+		source := argString(call, 0, "argument 1")
+		destination := argString(call, 1, "argument 2")
+		writes.add(source)
+		writes.add(destination)
+		if err := fn(source, destination); err != nil {
 			throwf(call.Otto, "%v", err)
 		}
 		return otto.UndefinedValue()

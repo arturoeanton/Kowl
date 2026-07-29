@@ -365,3 +365,66 @@ func TestEndToEndSlowHookDoesNotStallTheSupervisor(t *testing.T) {
 	<-done
 	events.Close()
 }
+
+// Two watched files whose hooks write each other used to wake each other forever:
+// suppression only covered the file the hook was woken for.
+func TestEndToEndTwoFilesWritingEachOtherSettle(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	journal := filepath.Join(dir, "journal.txt")
+	for _, path := range []string{a, b} {
+		if err := os.WriteFile(path, []byte("start"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	script := writeScript(t, `
+		var runs = 0;
+		function exist(name, op, event) { kAppendFile("watching " + event.name + "\n", `+quote(journal)+`) }
+		function write(name, op, event) {
+			runs = runs + 1;
+			kAppendFile("run " + runs + " for " + event.name + "\n", `+quote(journal)+`);
+			var other = event.name === "a.txt" ? `+quote(b)+` : `+quote(a)+`;
+			kStringToFile("touched by " + event.name, other);
+		}`)
+
+	runner := NewRunner(script)
+	logger := NewLogger(&safeBuffer{}, LevelError, FormatText)
+	events := newDispatcher(runner.Run, logger, 20*time.Millisecond, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{filepath.Join(dir, "?.txt")},
+			Interval:   10 * time.Millisecond,
+			MaxWatches: 64,
+		}, events.Dispatch, logger)
+	}()
+
+	waitFor(t, 3*time.Second, "both files to be watched", func() bool {
+		return strings.Count(journalOf(t, journal), "watching") == 2
+	})
+
+	// One external write kicks it off.
+	if err := os.WriteFile(a, []byte("edited by hand"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 3*time.Second, "the first hook to run", func() bool {
+		return strings.Contains(journalOf(t, journal), "run 1")
+	})
+
+	// Give a ping-pong every chance to show itself.
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+	events.Close()
+
+	runs := strings.Count(journalOf(t, journal), "run ")
+	if runs > 4 {
+		t.Fatalf("the hooks ran %d times for one external edit: they are waking each other\n%s",
+			runs, journalOf(t, journal))
+	}
+}

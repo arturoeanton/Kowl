@@ -27,7 +27,7 @@ func TestRunInvokesHookWithNameAndOp(t *testing.T) {
 			kStringToFile(name + "|" + op, `+quote(out)+`)
 		}`)
 
-	if err := NewRunner(script).Run("WRITE", "/tmp/observed"); err != nil {
+	if _, err := NewRunner(script).Run("WRITE", "/tmp/observed"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -41,7 +41,7 @@ func TestRunLowercasesOpToFindHook(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.txt")
 	script := writeScript(t, `function not_found(name, op) { kStringToFile(op, `+quote(out)+`) }`)
 
-	if err := NewRunner(script).Run("NOT_FOUND", "/tmp/gone"); err != nil {
+	if _, err := NewRunner(script).Run("NOT_FOUND", "/tmp/gone"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := readFile(t, out); got != "NOT_FOUND" {
@@ -54,7 +54,7 @@ func TestRunLowercasesOpToFindHook(t *testing.T) {
 func TestRunReportsScriptThatDoesNotParse(t *testing.T) {
 	script := writeScript(t, `function write( { this is not javascript }`)
 
-	err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	_, err := NewRunner(script).Run("WRITE", "/tmp/observed")
 	if err == nil {
 		t.Fatal("Run returned nil for a script that does not parse")
 	}
@@ -70,7 +70,7 @@ func TestRunReportsScriptThatDoesNotParse(t *testing.T) {
 func TestRunReportsHookFailure(t *testing.T) {
 	script := writeScript(t, `function write(name, op) { throw new Error("boom") }`)
 
-	err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	_, err := NewRunner(script).Run("WRITE", "/tmp/observed")
 	if err == nil {
 		t.Fatal("Run returned nil for a hook that throws")
 	}
@@ -82,7 +82,7 @@ func TestRunReportsHookFailure(t *testing.T) {
 func TestRunReportsUndefinedHookDistinctly(t *testing.T) {
 	script := writeScript(t, `function ticker(name, op) {}`)
 
-	err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	_, err := NewRunner(script).Run("WRITE", "/tmp/observed")
 	if !errors.Is(err, ErrHookNotDefined) {
 		t.Fatalf("Run error = %v, want ErrHookNotDefined", err)
 	}
@@ -92,7 +92,7 @@ func TestRunReportsUndefinedHookDistinctly(t *testing.T) {
 func TestRunTreatsNonFunctionHookAsUndefined(t *testing.T) {
 	script := writeScript(t, `var write = 42;`)
 
-	err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	_, err := NewRunner(script).Run("WRITE", "/tmp/observed")
 	if !errors.Is(err, ErrHookNotDefined) {
 		t.Fatalf("Run error = %v, want ErrHookNotDefined", err)
 	}
@@ -103,7 +103,7 @@ func TestRunTreatsNonFunctionHookAsUndefined(t *testing.T) {
 func TestRunReportsUnreadableScriptInsteadOfExiting(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.js")
 
-	err := NewRunner(missing).Run("WRITE", "/tmp/observed")
+	_, err := NewRunner(missing).Run("WRITE", "/tmp/observed")
 	if err == nil {
 		t.Fatal("Run returned nil for a script that cannot be read")
 	}
@@ -118,7 +118,7 @@ func TestRunReloadsScriptAfterItChangesOnDisk(t *testing.T) {
 	script := writeScript(t, `function write() { kStringToFile("first", `+quote(out)+`) }`)
 	runner := NewRunner(script)
 
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	if got := readFile(t, out); got != "first" {
@@ -126,7 +126,7 @@ func TestRunReloadsScriptAfterItChangesOnDisk(t *testing.T) {
 	}
 
 	rewriteScript(t, script, `function write() { kStringToFile("second", `+quote(out)+`) }`)
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if got := readFile(t, out); got != "second" {
@@ -147,7 +147,7 @@ func TestRunKeepsGlobalsBetweenEvents(t *testing.T) {
 	runner := NewRunner(script)
 
 	for i := 0; i < 3; i++ {
-		if err := runner.Run("WRITE", "x"); err != nil {
+		if _, err := runner.Run("WRITE", "x"); err != nil {
 			t.Fatalf("Run %d: %v", i, err)
 		}
 	}
@@ -169,11 +169,11 @@ func TestRunResetsGlobalsWhenScriptIsReloaded(t *testing.T) {
 	script := writeScript(t, body)
 	runner := NewRunner(script)
 
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
 	rewriteScript(t, script, body+"\n// touched")
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("Run after reload: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestRunInterruptsHookThatExceedsTimeout(t *testing.T) {
 	runner.timeout = 200 * time.Millisecond
 
 	start := time.Now()
-	err := runner.Run("WRITE", "x")
+	_, err := runner.Run("WRITE", "x")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -212,10 +212,10 @@ func TestRunRecoversAfterAnInterruptedHook(t *testing.T) {
 	runner := NewRunner(script)
 	runner.timeout = 200 * time.Millisecond
 
-	if err := runner.Run("WRITE", "x"); err == nil {
+	if _, err := runner.Run("WRITE", "x"); err == nil {
 		t.Fatal("expected the runaway hook to be interrupted")
 	}
-	if err := runner.Run("TICKER", "x"); err != nil {
+	if _, err := runner.Run("TICKER", "x"); err != nil {
 		t.Fatalf("Run after an interrupt: %v", err)
 	}
 	if got := readFile(t, out); got != "alive" {
@@ -246,7 +246,7 @@ func TestRunIsSafeForConcurrentUse(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := runner.Run("WRITE", "/tmp/observed"); err != nil {
+			if _, err := runner.Run("WRITE", "/tmp/observed"); err != nil {
 				errs <- err
 			}
 		}()
@@ -331,7 +331,7 @@ func TestRunPassesAnEventDescribingTheFile(t *testing.T) {
 			].join("|"), `+quote(out)+`)
 		}`)
 
-	if err := NewRunner(script).Run("WRITE", observed); err != nil {
+	if _, err := NewRunner(script).Run("WRITE", observed); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -354,7 +354,7 @@ func TestRunEventReportsAMissingPath(t *testing.T) {
 			kStringToFile(event.exists + "|" + event.size + "|" + event.name, `+quote(out)+`)
 		}`)
 
-	if err := NewRunner(script).Run("REMOVE", gone); err != nil {
+	if _, err := NewRunner(script).Run("REMOVE", gone); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got, want := readFile(t, out), "false|0|gone.txt"; got != want {
@@ -371,7 +371,7 @@ func TestRunEventReportsADirectory(t *testing.T) {
 			kStringToFile(event.isDir + "|" + event.exists, `+quote(out)+`)
 		}`)
 
-	if err := NewRunner(script).Run("CREATE", dir); err != nil {
+	if _, err := NewRunner(script).Run("CREATE", dir); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got, want := readFile(t, out), "true|true"; got != want {
@@ -389,7 +389,7 @@ func TestRunInterruptsARunawayScriptTopLevel(t *testing.T) {
 	runner.timeout = 200 * time.Millisecond
 
 	start := time.Now()
-	err := runner.Run("WRITE", "x")
+	_, err := runner.Run("WRITE", "x")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -429,12 +429,12 @@ func TestRunRecoversAfterAnInterruptedLoad(t *testing.T) {
 	runner := NewRunner(script)
 	runner.timeout = 200 * time.Millisecond
 
-	if err := runner.Run("WRITE", "x"); err == nil {
+	if _, err := runner.Run("WRITE", "x"); err == nil {
 		t.Fatal("expected the runaway load to be interrupted")
 	}
 
 	rewriteScript(t, script, `function write(name, op) { kStringToFile("alive", `+quote(out)+`) }`)
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("Run after an interrupted load: %v", err)
 	}
 	if got := readFile(t, out); got != "alive" {
@@ -452,10 +452,108 @@ func TestRunAllowsATopLevelThatFinishesInTime(t *testing.T) {
 	runner := NewRunner(script)
 	runner.timeout = 10 * time.Second
 
-	if err := runner.Run("WRITE", "x"); err != nil {
+	if _, err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := readFile(t, out); got != "199990000" {
 		t.Fatalf("top level computed %q, want %q", got, "199990000")
+	}
+}
+
+// Kowl tells a hook's own writes apart from real changes by recording what the helpers
+// touched, which is exact where comparing timestamps only guesses.
+func TestRunReportsThePathsAHookWroteThroughHelpers(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	appended := filepath.Join(dir, "appended.txt")
+
+	script := writeScript(t, `
+		function write(name, op) {
+			kStringToFile("x", `+quote(target)+`);
+			kAppendFile("y", `+quote(appended)+`);
+			kFileToString(`+quote(target)+`);
+		}`)
+
+	written, err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(written, ","), target+","+appended; got != want {
+		t.Fatalf("written = %q, want %q", got, want)
+	}
+}
+
+// Reading a file is not writing it.
+func TestRunReportsNoWritesForAReadOnlyHook(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.txt")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, `function write(name, op) { kFileToString(`+quote(path)+`) }`)
+
+	written, err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(written) != 0 {
+		t.Fatalf("written = %v for a hook that only read", written)
+	}
+}
+
+// A hook that wrote and then threw still wrote.
+func TestRunReportsWritesMadeBeforeAHookFailed(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target.txt")
+	script := writeScript(t, `
+		function write(name, op) {
+			kStringToFile("x", `+quote(target)+`);
+			throw new Error("boom");
+		}`)
+
+	written, err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	if err == nil {
+		t.Fatal("expected the hook to fail")
+	}
+	if len(written) != 1 || written[0] != target {
+		t.Fatalf("written = %v, want %v", written, []string{target})
+	}
+}
+
+// One hook's writes must not be attributed to the next.
+func TestRunDoesNotCarryWritesBetweenEvents(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target.txt")
+	script := writeScript(t, `
+		function write(name, op) { kStringToFile("x", `+quote(target)+`) }
+		function ticker(name, op) {}`)
+	runner := NewRunner(script)
+
+	if _, err := runner.Run("WRITE", "/tmp/observed"); err != nil {
+		t.Fatal(err)
+	}
+	written, err := runner.Run("TICKER", "/tmp/observed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 0 {
+		t.Fatalf("the ticker hook was credited with %v", written)
+	}
+}
+
+// Copy and move touch two paths, and either may be watched.
+func TestRunReportsBothSidesOfACopyAndMove(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.txt")
+	copied := filepath.Join(dir, "copied.txt")
+	if err := os.WriteFile(source, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, `
+		function write(name, op) { kCopyFile(`+quote(source)+`, `+quote(copied)+`) }`)
+
+	written, err := NewRunner(script).Run("WRITE", "/tmp/observed")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := strings.Join(written, ","), source+","+copied; got != want {
+		t.Fatalf("written = %q, want both sides %q", got, want)
 	}
 }

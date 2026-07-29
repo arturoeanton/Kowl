@@ -145,6 +145,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		httpTimeout: opts.HTTPTimeout,
 		maxOutput:   opts.MaxOutput,
 		logger:      logger,
+		writes:      &writeLog{},
 	}
 
 	hooks, err := runner.DefinedHooks()
