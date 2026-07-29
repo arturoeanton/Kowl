@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -62,7 +63,13 @@ type WatchConfig struct {
 	// Exclude drops matching paths, and stops a recursive walk from descending into
 	// matching directories.
 	Exclude []string
+	// observe builds the observer for one path. Nil means the real one; tests replace
+	// it to drive cases a real watcher cannot be made to produce on demand.
+	observe observer
 }
+
+// observer starts watching a path and returns a channel closed once it has stopped.
+type observer func(ctx context.Context, path string, dispatch Dispatch, logger *Logger) (<-chan struct{}, error)
 
 // resolved is what one pass over the patterns found.
 type resolved struct {
@@ -194,6 +201,16 @@ func (h *observerHandle) stop() {
 	<-h.done
 }
 
+// dead reports whether the observer has already stopped on its own.
+func (h *observerHandle) dead() bool {
+	select {
+	case <-h.done:
+		return true
+	default:
+		return false
+	}
+}
+
 // Supervise keeps exactly one fsnotify observer alive per path the patterns match.
 //
 // fsnotify watches inodes rather than paths, so an observer is torn down when its path
@@ -220,6 +237,11 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 			delete(observers, path)
 		}
 	}()
+
+	start := cfg.observe
+	if start == nil {
+		start = observe
+	}
 
 	// capped remembers whether the watch limit was already reported, so hitting it does
 	// not repeat the same message every tick.
@@ -248,10 +270,18 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 			}
 
 			for path, handle := range observers {
-				if !stillThere[path] {
+				switch {
+				case !stillThere[path]:
 					handle.stop()
 					delete(observers, path)
 					logger.Debugf("stopped watching %s", path)
+				case handle.dead():
+					// The observer gave up, most likely after losing events to a
+					// kernel queue overflow. Drop it so the loop below builds a
+					// fresh one and announces the path again.
+					handle.stop()
+					delete(observers, path)
+					logger.Debugf("observer for %s stopped on its own, restarting", path)
 				}
 			}
 
@@ -260,7 +290,7 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 					continue
 				}
 				observerCtx, observerCancel := context.WithCancel(ctx)
-				done, err := observe(observerCtx, path, dispatch, logger)
+				done, err := start(observerCtx, path, dispatch, logger)
 				if err != nil {
 					// The path can vanish between resolve and Add. Leave it unwatched
 					// so the next tick retries, instead of keeping a live observer
@@ -312,12 +342,27 @@ func observe(ctx context.Context, path string, dispatch Dispatch, logger *Logger
 				if !ok {
 					return
 				}
-				// A watcher error is not fatal: report it and keep observing.
+				if fatalWatcherError(err) {
+					// Events were lost, so this watcher can no longer be trusted to
+					// describe the path. Stop: the supervisor notices and starts a
+					// fresh one, which announces the path again with EXIST so a
+					// script can resynchronise.
+					logger.Errorf("lost events on %s: %v, starting over", path, err)
+					return
+				}
+				// Any other watcher error is not fatal: report it and keep observing.
 				logger.Errorf("watcher error on %s: %v", path, err)
 			}
 		}
 	}()
 	return done, nil
+}
+
+// fatalWatcherError reports whether an error means the watcher has stopped describing
+// its path faithfully, rather than being a one-off that can be logged and shrugged off.
+func fatalWatcherError(err error) bool {
+	// An overflow means the kernel dropped events nobody will ever see.
+	return errors.Is(err, fsnotify.ErrEventOverflow)
 }
 
 // operations returns every op set on an event. fsnotify can report several at once, so

@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // pathRecorder records the paths a dispatch was called with, per operation.
@@ -632,4 +636,93 @@ func TestSuperviseDoesNotWatchExcludedPaths(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+// --- observers that give up --------------------------------------------------------
+
+// An observer that stops on its own, which is what happens after the kernel loses
+// events to a queue overflow, used to leave the path silently unwatched for good.
+func TestSuperviseRestartsAnObserverThatStoppedOnItsOwn(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "observed.txt")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A real watcher cannot be made to overflow on demand, so stand in for one that
+	// gave up: the supervisor only ever sees the done channel close.
+	var mu sync.Mutex
+	var current chan struct{}
+	fake := func(ctx context.Context, path string, dispatch Dispatch, logger *Logger) (<-chan struct{}, error) {
+		done := make(chan struct{})
+		mu.Lock()
+		current = done
+		mu.Unlock()
+		dispatch("EXIST", path)
+		go func() {
+			<-ctx.Done()
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+		}()
+		return done, nil
+	}
+
+	rec := &pathRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &safeBuffer{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{file},
+			Interval:   10 * time.Millisecond,
+			MaxWatches: 64,
+			observe:    fake,
+		}, rec.dispatch, logs.logger())
+	}()
+
+	waitFor(t, 2*time.Second, "the first EXIST", func() bool { return rec.countOp("EXIST") == 1 })
+
+	mu.Lock()
+	close(current)
+	mu.Unlock()
+
+	waitFor(t, 3*time.Second, "the path to be announced again", func() bool {
+		return rec.countOp("EXIST") >= 2
+	})
+
+	cancel()
+	<-done
+}
+
+// A real observer must go the same way when the kernel reports lost events.
+func TestFatalWatcherError(t *testing.T) {
+	if !fatalWatcherError(fsnotify.ErrEventOverflow) {
+		t.Fatal("an overflow is not treated as fatal, so lost events go unnoticed")
+	}
+	if !fatalWatcherError(fmt.Errorf("watching: %w", fsnotify.ErrEventOverflow)) {
+		t.Fatal("a wrapped overflow is not recognised")
+	}
+	if fatalWatcherError(errors.New("some transient problem")) {
+		t.Fatal("an ordinary error is treated as fatal, so the watcher restarts for nothing")
+	}
+	if fatalWatcherError(nil) {
+		t.Fatal("a nil error is treated as fatal")
+	}
+}
+
+func TestObserverHandleDeadReportsWhetherItStopped(t *testing.T) {
+	done := make(chan struct{})
+	handle := &observerHandle{cancel: func() {}, done: done}
+
+	if handle.dead() {
+		t.Fatal("dead() is true for an observer that is still running")
+	}
+	close(done)
+	if !handle.dead() {
+		t.Fatal("dead() is false for an observer that has stopped")
+	}
 }

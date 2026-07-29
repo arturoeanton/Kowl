@@ -397,5 +397,8 @@ go test -v -run TestEncrypt ./js
   on Windows.
 * Watchers follow inodes, not paths. Kowl rebuilds a watcher when the file it was
   watching is deleted and recreated, which it notices within a second.
+* If the kernel's own queue overflows, events are lost before Kowl ever sees them. That
+  is reported, and the watcher for the affected path is rebuilt so the path is announced
+  again with `EXIST`, which is a script's cue to resynchronise from whatever it tracks.
 * `kExec` runs whatever a script asks it to, with the privileges of the Kowl process.
   Treat the script file as trusted input.
