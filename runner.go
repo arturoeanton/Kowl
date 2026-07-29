@@ -5,13 +5,10 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/robertkrimen/otto"
-	"gopkg.in/h2non/gentleman.v2"
-	"gopkg.in/h2non/gentleman.v2/plugins/body"
-
-	"Kowl/js"
 )
 
 // ErrHookNotDefined is returned by Runner.Run when the script parses cleanly but does
@@ -23,23 +20,53 @@ var ErrHookNotDefined = errors.New("hook not defined")
 // reported at startup.
 var hookNames = []string{"exist", "create", "write", "remove", "rename", "chmod", "ticker", "not_found"}
 
-// Runner loads the user script into a fresh otto VM for every dispatched event. The
-// script is re-read on each Run, so edits take effect without restarting Kowl.
+// hookTimeout is the value panicked with when a hook overruns its budget. It is
+// recovered in Run and never escapes.
+type hookTimeout struct{}
+
+// Runner owns the JavaScript side of Kowl: one otto VM, the script loaded into it, and
+// the lock that keeps hooks from running concurrently.
+//
+// The VM is kept between events rather than rebuilt, so the script is parsed once
+// instead of once per event and globals survive from one hook to the next. It is
+// reloaded when the script file changes on disk, so edits still take effect without a
+// restart.
 type Runner struct {
 	scriptPath string
+	config     vmConfig
+	timeout    time.Duration
+
+	mu     sync.Mutex
+	vm     *otto.Otto
+	loaded fileStamp
+}
+
+// fileStamp identifies a version of the script file cheaply.
+type fileStamp struct {
+	modTime time.Time
+	size    int64
 }
 
 // NewRunner returns a Runner bound to the JavaScript file at scriptPath.
 func NewRunner(scriptPath string) *Runner {
-	return &Runner{scriptPath: scriptPath}
+	return &Runner{
+		scriptPath: scriptPath,
+		config:     defaultVMConfig(),
+		timeout:    defaultHookTimeout,
+	}
 }
 
-// Run loads the script and invokes the hook matching op, lowercased: WRITE calls
-// write(), NOT_FOUND calls not_found(), and so on. Every failure is returned rather
-// than logged or fatal, so the caller decides what is worth reporting and Kowl keeps
-// running when a single event goes wrong.
-func (r *Runner) Run(op, name string) error {
-	vm, err := r.load()
+// Run invokes the hook matching op, lowercased: WRITE calls write(), NOT_FOUND calls
+// not_found(), and so on. Hooks are serialised, so a script never has two of its own
+// functions running at once and can keep state in ordinary globals.
+//
+// Every failure is returned rather than logged or fatal, so the caller decides what is
+// worth reporting and Kowl keeps watching when a single event goes wrong.
+func (r *Runner) Run(op, name string) (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	vm, err := r.ensureLoaded()
 	if err != nil {
 		return err
 	}
@@ -49,8 +76,36 @@ func (r *Runner) Run(op, name string) error {
 	if err != nil || !fn.IsFunction() {
 		return fmt.Errorf("%s(): %w", hook, ErrHookNotDefined)
 	}
-	if _, err := fn.Call(otto.NullValue(), name, op, os.Args); err != nil {
-		return fmt.Errorf("%s() failed: %w", hook, err)
+
+	defer func() {
+		caught := recover()
+		if caught == nil {
+			return
+		}
+		if _, ok := caught.(hookTimeout); !ok {
+			panic(caught)
+		}
+		// The VM was interrupted part-way through a statement, so its state is no
+		// longer trustworthy. Drop it and load a fresh one for the next event.
+		r.discard()
+		err = fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
+	}()
+
+	interrupt := make(chan func(), 1)
+	vm.Interrupt = interrupt
+	watchdog := time.AfterFunc(r.timeout, func() {
+		select {
+		case interrupt <- func() { panic(hookTimeout{}) }:
+		default:
+		}
+	})
+	defer func() {
+		watchdog.Stop()
+		vm.Interrupt = nil
+	}()
+
+	if _, callErr := fn.Call(otto.NullValue(), name, op, os.Args); callErr != nil {
+		return fmt.Errorf("%s() failed: %w", hook, callErr)
 	}
 	return nil
 }
@@ -59,7 +114,10 @@ func (r *Runner) Run(op, name string) error {
 // startup check: a script that does not parse is reported before Kowl starts watching,
 // instead of failing silently on every event.
 func (r *Runner) DefinedHooks() ([]string, error) {
-	vm, err := r.load()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	vm, err := r.ensureLoaded()
 	if err != nil {
 		return nil, err
 	}
@@ -72,57 +130,33 @@ func (r *Runner) DefinedHooks() ([]string, error) {
 	return defined, nil
 }
 
-// load reads the script from disk and evaluates it in a new VM.
-func (r *Runner) load() (*otto.Otto, error) {
+// ensureLoaded returns the VM holding the current version of the script, reloading it
+// if the file changed since it was last read. The caller must hold r.mu.
+func (r *Runner) ensureLoaded() (*otto.Otto, error) {
+	info, err := os.Stat(r.scriptPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading script: %w", err)
+	}
+	stamp := fileStamp{modTime: info.ModTime(), size: info.Size()}
+	if r.vm != nil && r.loaded == stamp {
+		return r.vm, nil
+	}
+
 	code, err := os.ReadFile(r.scriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading script: %w", err)
 	}
-	vm := newVM()
+	vm := newVM(r.config)
 	if _, err := vm.Run(string(code)); err != nil {
+		r.discard()
 		return nil, fmt.Errorf("loading %s: %w", r.scriptPath, err)
 	}
+
+	r.vm, r.loaded = vm, stamp
 	return vm, nil
 }
 
-// newVM builds an otto VM with every k* binding installed. Each event gets its own VM,
-// so nothing a hook stores in a global survives to the next event; use the process
-// environment (kSetEnv/kGetEnv) for state that must persist.
-func newVM() *otto.Otto {
-	vm := otto.New()
-	cli := gentleman.New()
-
-	bindings := map[string]interface{}{
-		"kExec": js.KExec,
-
-		"kFileToString": js.KFileToString,
-		"kStringToFile": js.KStringToFile,
-		"kAppendFile":   js.KAppendFile,
-		"kRemoveFile":   js.KRemoveFile,
-
-		"kEncrypt": js.KEncrypt,
-		"kDecrypt": js.KDecrypt,
-
-		"kCli":        cli,
-		"kBodyJSON":   body.JSON,
-		"kBodyXML":    body.XML,
-		"kBodyString": body.String,
-
-		"kGetEnv":   os.Getenv,
-		"kSetEnv":   os.Setenv,
-		"kHostname": os.Hostname,
-		"kGetpid":   os.Getpid,
-		"kGetppid":  os.Getppid,
-		"kGetgid":   os.Getgid,
-		"kGetuid":   os.Getuid,
-		"kGetegid":  os.Getegid,
-		"kArgs":     os.Args,
-
-		"kNow": time.Now,
-	}
-	for name, value := range bindings {
-		// Set only fails on an invalid identifier, and every name here is a literal.
-		_ = vm.Set(name, value)
-	}
-	return vm
+// discard forces the script to be reloaded on the next call. The caller must hold r.mu.
+func (r *Runner) discard() {
+	r.vm, r.loaded = nil, fileStamp{}
 }

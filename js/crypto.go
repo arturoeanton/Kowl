@@ -3,80 +3,110 @@ package js
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/pbkdf2"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"io"
+	"fmt"
 )
-func KEncrypt(skey , message string) ( string, int) {
 
-	rest := len(skey) % aes.BlockSize
+// Ciphertext layout, base64url encoded:
+//
+//	version(1) || salt(saltSize) || nonce(gcmNonceSize) || AES-256-GCM ciphertext+tag
+//
+// The passphrase is stretched with PBKDF2 rather than used as a key directly, and GCM
+// authenticates the result, so tampering is detected instead of silently decrypting to
+// garbage.
+const (
+	cryptoVersion = 1
+	saltSize      = 16
+	keySize       = 32
+	// pbkdf2Iterations follows the OWASP recommendation for PBKDF2-HMAC-SHA256.
+	pbkdf2Iterations = 210000
+)
 
-	if rest >  0 {
-		for i := 0; i < (aes.BlockSize - rest); i++ {
-			skey = skey + " "
-		}
+// ErrDecrypt is returned when a ciphertext cannot be authenticated: a wrong
+// passphrase, a corrupted payload or a deliberate modification all look the same.
+var ErrDecrypt = errors.New("cannot decrypt: wrong passphrase or corrupted ciphertext")
+
+// Encrypt seals plaintext under passphrase and returns a base64url string.
+func Encrypt(passphrase, plaintext string) (string, error) {
+	if passphrase == "" {
+		return "", errors.New("passphrase must not be empty")
 	}
 
+	salt := make([]byte, saltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generating salt: %w", err)
+	}
 
-	key := []byte(skey)
-	plainText := []byte(message)
-
-	block, err := aes.NewCipher(key)
+	gcm, err := newGCM(passphrase, salt)
 	if err != nil {
-		return err.Error(), -1
+		return "", err
 	}
 
-	//IV needs to be unique, but doesn't have to be secure.
-	//It's common to put it at the beginning of the ciphertext.
-	cipherText := make([]byte, aes.BlockSize+len(plainText))
-	iv := cipherText[:aes.BlockSize]
-	if _, err = io.ReadFull(rand.Reader, iv); err != nil {
-		return err.Error(), -2
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("generating nonce: %w", err)
 	}
 
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(cipherText[aes.BlockSize:], plainText)
+	payload := make([]byte, 0, 1+len(salt)+len(nonce)+len(plaintext)+gcm.Overhead())
+	payload = append(payload, cryptoVersion)
+	payload = append(payload, salt...)
+	payload = append(payload, nonce...)
+	payload = gcm.Seal(payload, nonce, []byte(plaintext), nil)
 
-	//returns to base64 encoded string
-	encmess := base64.URLEncoding.EncodeToString(cipherText)
-	return encmess, 0
+	return base64.URLEncoding.EncodeToString(payload), nil
 }
 
-func KDecrypt(skey, securemess string) ( string,  int) {
-	rest := len(skey) % aes.BlockSize
-
-	if rest >  0 {
-		for i := 0; i < (aes.BlockSize - rest); i++ {
-			skey = skey + " "
-		}
+// Decrypt opens a ciphertext produced by Encrypt.
+func Decrypt(passphrase, ciphertext string) (string, error) {
+	if passphrase == "" {
+		return "", errors.New("passphrase must not be empty")
 	}
 
-	key := []byte(skey)
-	cipherText, err := base64.URLEncoding.DecodeString(securemess)
+	payload, err := base64.URLEncoding.DecodeString(ciphertext)
 	if err != nil {
-		return err.Error() , -1
+		return "", fmt.Errorf("decoding ciphertext: %w", err)
+	}
+	if len(payload) < 1 || payload[0] != cryptoVersion {
+		return "", fmt.Errorf("unsupported ciphertext format")
+	}
+	payload = payload[1:]
+	if len(payload) < saltSize {
+		return "", ErrDecrypt
 	}
 
+	salt, rest := payload[:saltSize], payload[saltSize:]
+	gcm, err := newGCM(passphrase, salt)
+	if err != nil {
+		return "", err
+	}
+	if len(rest) < gcm.NonceSize() {
+		return "", ErrDecrypt
+	}
+
+	nonce, sealed := rest[:gcm.NonceSize()], rest[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
+	if err != nil {
+		return "", ErrDecrypt
+	}
+	return string(plaintext), nil
+}
+
+func newGCM(passphrase string, salt []byte) (cipher.AEAD, error) {
+	key, err := pbkdf2.Key(sha256.New, passphrase, salt, pbkdf2Iterations, keySize)
+	if err != nil {
+		return nil, fmt.Errorf("deriving key: %w", err)
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return err.Error(), -2
+		return nil, fmt.Errorf("creating cipher: %w", err)
 	}
-
-	if len(cipherText) < aes.BlockSize {
-		err = errors.New("Ciphertext block size is too short!")
-		return "Ciphertext block size is too short!" , -3
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("creating GCM: %w", err)
 	}
-
-	//IV needs to be unique, but doesn't have to be secure.
-	//It's common to put it at the beginning of the ciphertext.
-	iv := cipherText[:aes.BlockSize]
-	cipherText = cipherText[aes.BlockSize:]
-
-	stream := cipher.NewCFBDecrypter(block, iv)
-	// XORKeyStream can work in-place if the two arguments are the same.
-	stream.XORKeyStream(cipherText, cipherText)
-
-	decodedmess := string(cipherText)
-	return decodedmess, 0
+	return gcm, nil
 }

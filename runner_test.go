@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // writeScript drops code into a temporary .js file and returns its path.
@@ -111,8 +112,8 @@ func TestRunReportsUnreadableScriptInsteadOfExiting(t *testing.T) {
 	}
 }
 
-// The script is re-read per event, which is what makes edits take effect live.
-func TestRunRereadsScriptBetweenEvents(t *testing.T) {
+// Editing the script must take effect without restarting Kowl.
+func TestRunReloadsScriptAfterItChangesOnDisk(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.txt")
 	script := writeScript(t, `function write() { kStringToFile("first", `+quote(out)+`) }`)
 	runner := NewRunner(script)
@@ -124,9 +125,7 @@ func TestRunRereadsScriptBetweenEvents(t *testing.T) {
 		t.Fatalf("first run wrote %q, want %q", got, "first")
 	}
 
-	if err := os.WriteFile(script, []byte(`function write() { kStringToFile("second", `+quote(out)+`) }`), 0o644); err != nil {
-		t.Fatalf("rewriting script: %v", err)
-	}
+	rewriteScript(t, script, `function write() { kStringToFile("second", `+quote(out)+`) }`)
 	if err := runner.Run("WRITE", "x"); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -135,13 +134,108 @@ func TestRunRereadsScriptBetweenEvents(t *testing.T) {
 	}
 }
 
-// The watcher and the poller dispatch from separate goroutines. Enabling underscore
-// from inside the VM setup raced on otto's unlocked registry; run this with -race.
-func TestRunIsSafeForConcurrentUse(t *testing.T) {
+// The VM is kept between events, so a hook can hold state in an ordinary global
+// instead of smuggling it through the process environment.
+func TestRunKeepsGlobalsBetweenEvents(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
 	script := writeScript(t, `
+		var seen = 0
+		function write() {
+			seen = seen + 1
+			kStringToFile(String(seen), `+quote(out)+`)
+		}`)
+	runner := NewRunner(script)
+
+	for i := 0; i < 3; i++ {
+		if err := runner.Run("WRITE", "x"); err != nil {
+			t.Fatalf("Run %d: %v", i, err)
+		}
+	}
+	if got := readFile(t, out); got != "3" {
+		t.Fatalf("counter reached %q after three events, want %q", got, "3")
+	}
+}
+
+// Reloading resets the script's globals, which is the documented trade-off for
+// picking up edits live.
+func TestRunResetsGlobalsWhenScriptIsReloaded(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	body := `
+		var seen = 0
+		function write() {
+			seen = seen + 1
+			kStringToFile(String(seen), ` + quote(out) + `)
+		}`
+	script := writeScript(t, body)
+	runner := NewRunner(script)
+
+	if err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	rewriteScript(t, script, body+"\n// touched")
+	if err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatalf("Run after reload: %v", err)
+	}
+
+	if got := readFile(t, out); got != "1" {
+		t.Fatalf("counter is %q after a reload, want it reset to %q", got, "1")
+	}
+}
+
+// A hook that never returns used to hold its goroutine forever.
+func TestRunInterruptsHookThatExceedsTimeout(t *testing.T) {
+	script := writeScript(t, `function write() { while (true) {} }`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	start := time.Now()
+	err := runner.Run("WRITE", "x")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Run returned nil for a hook that never returns")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("error %q does not explain that the hook was interrupted", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Run took %s, so the watchdog did not interrupt the hook", elapsed)
+	}
+}
+
+// After an interrupt the VM is discarded, so the next event still works.
+func TestRunRecoversAfterAnInterruptedHook(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	script := writeScript(t, `
+		function write() { while (true) {} }
+		function ticker() { kStringToFile("alive", `+quote(out)+`) }`)
+	runner := NewRunner(script)
+	runner.timeout = 200 * time.Millisecond
+
+	if err := runner.Run("WRITE", "x"); err == nil {
+		t.Fatal("expected the runaway hook to be interrupted")
+	}
+	if err := runner.Run("TICKER", "x"); err != nil {
+		t.Fatalf("Run after an interrupt: %v", err)
+	}
+	if got := readFile(t, out); got != "alive" {
+		t.Fatalf("ticker wrote %q after an interrupt, want %q", got, "alive")
+	}
+}
+
+// The watcher and the poller dispatch from separate goroutines. Enabling underscore
+// while building each VM raced on otto's unlocked registry; run this with -race.
+// Serialised hooks also mean a counter in a global lands on exactly one increment per
+// event, with no lost updates.
+func TestRunIsSafeForConcurrentUse(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	script := writeScript(t, `
+		var seen = 0
 		function write(name, op) {
 			var doubled = _.map([1, 2, 3], function (n) { return n * 2 })
 			if (doubled[2] !== 6) { throw new Error("underscore not available") }
+			seen = seen + 1
+			kStringToFile(String(seen), `+quote(out)+`)
 		}`)
 	runner := NewRunner(script)
 
@@ -162,6 +256,9 @@ func TestRunIsSafeForConcurrentUse(t *testing.T) {
 
 	for err := range errs {
 		t.Fatalf("concurrent Run: %v", err)
+	}
+	if got := readFile(t, out); got != "32" {
+		t.Fatalf("counter reached %q after %d events, want %q", got, goroutines, "32")
 	}
 }
 
@@ -185,6 +282,19 @@ func TestDefinedHooksFailsOnScriptThatDoesNotParse(t *testing.T) {
 
 	if _, err := NewRunner(script).DefinedHooks(); err == nil {
 		t.Fatal("DefinedHooks returned nil error for a script that does not parse")
+	}
+}
+
+// rewriteScript replaces a script's contents and moves its modification time forward,
+// so the change is visible regardless of filesystem timestamp resolution.
+func rewriteScript(t *testing.T, path, code string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(code), 0o644); err != nil {
+		t.Fatalf("rewriting script: %v", err)
+	}
+	later := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatalf("touching script: %v", err)
 	}
 }
 

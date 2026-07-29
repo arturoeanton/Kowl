@@ -1,0 +1,92 @@
+package js
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+const testLimit = 1 << 20
+
+func TestExecCapturesStdout(t *testing.T) {
+	result, err := Exec(context.Background(), testLimit, "echo", "hello")
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "hello" {
+		t.Fatalf("Stdout = %q, want %q", got, "hello")
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, want 0", result.ExitCode)
+	}
+}
+
+// A command that ran and failed used to have its real output thrown away and replaced
+// by the Go error string, which is exactly when the output matters most.
+func TestExecKeepsOutputOfFailingCommand(t *testing.T) {
+	result, err := Exec(context.Background(), testLimit,
+		"sh", "-c", "echo to-stdout; echo to-stderr 1>&2; exit 3")
+	if err != nil {
+		t.Fatalf("Exec returned an error for a command that ran and exited non-zero: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "to-stdout" {
+		t.Fatalf("Stdout = %q, want %q", got, "to-stdout")
+	}
+	if got := strings.TrimSpace(result.Stderr); got != "to-stderr" {
+		t.Fatalf("Stderr = %q, want %q", got, "to-stderr")
+	}
+	if result.ExitCode != 3 {
+		t.Fatalf("ExitCode = %d, want 3", result.ExitCode)
+	}
+}
+
+func TestExecReportsCommandThatCannotStart(t *testing.T) {
+	_, err := Exec(context.Background(), testLimit, "kowl-no-such-command-exists")
+	if err == nil {
+		t.Fatal("Exec returned nil error for a command that does not exist")
+	}
+}
+
+// Without a deadline a hung command blocked its goroutine forever.
+func TestExecStopsAtContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := Exec(ctx, testLimit, "sleep", "10")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Exec returned nil error for a command that outlived its context")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("Exec took %s, so the deadline did not stop the command", elapsed)
+	}
+}
+
+// A command producing unbounded output must not be able to exhaust memory.
+func TestExecTruncatesOutputAtLimit(t *testing.T) {
+	const limit = 128
+
+	result, err := Exec(context.Background(), limit, "sh", "-c", "printf 'x%.0s' $(seq 1 5000)")
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if len(result.Stdout) != limit {
+		t.Fatalf("captured %d bytes of stdout, want the %d byte limit", len(result.Stdout), limit)
+	}
+	if !result.Truncated {
+		t.Fatal("Truncated is false even though output was cut short")
+	}
+}
+
+func TestExecReportsUntruncatedOutput(t *testing.T) {
+	result, err := Exec(context.Background(), testLimit, "echo", "short")
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if result.Truncated {
+		t.Fatal("Truncated is true for output well under the limit")
+	}
+}
