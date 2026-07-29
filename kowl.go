@@ -34,6 +34,7 @@ type options struct {
 	FlagNotWatcher bool          `short:"w" long:"flagNotWatcher" description:"disable the filesystem watcher, leaving only polling"`
 	Recursive      bool          `short:"r" long:"recursive" description:"watch every directory below a matched directory"`
 	MaxWatches     int           `long:"max-watches" default:"4096" description:"how many paths may be watched at once"`
+	Exclude        []string      `short:"x" long:"exclude" description:"skip matching paths, repeatable; no separator matches the base name"`
 	Debounce       time.Duration `long:"debounce" default:"200ms" description:"quiet period before a burst of write events runs a hook, 0 disables"`
 	SelfTrigger    bool          `long:"self-trigger" description:"let a hook that writes an observed file wake itself again"`
 	HookTimeout    time.Duration `long:"hook-timeout" default:"30s" description:"how long a hook may run before it is interrupted"`
@@ -130,6 +131,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	if err := ValidatePatterns(opts.Exclude); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 
 	logger := NewLogger(stderr, level, format)
 
@@ -170,6 +175,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 				Interval:   supervisorInterval,
 				Recursive:  opts.Recursive,
 				MaxWatches: opts.MaxWatches,
+				Exclude:    opts.Exclude,
 			}, events.Dispatch, logger)
 		}()
 	}

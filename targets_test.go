@@ -62,7 +62,7 @@ func TestResolveExpandsGlobsAndSkipsMissingPaths(t *testing.T) {
 		filepath.Join(dir, "*.log"),
 		filepath.Join(dir, "c.txt"),
 		filepath.Join(dir, "missing.txt"),
-	}, false)
+	}, false, nil)
 
 	want := []string{
 		filepath.Join(dir, "a.log"),
@@ -81,7 +81,7 @@ func TestResolveDeduplicatesOverlappingPatterns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := resolve([]string{file, filepath.Join(dir, "*.log"), filepath.Join(dir, "a.*")}, false)
+	got := resolve([]string{file, filepath.Join(dir, "*.log"), filepath.Join(dir, "a.*")}, false, nil)
 	if len(got) != 1 || got[0] != file {
 		t.Fatalf("resolve = %v, want exactly %v", got, []string{file})
 	}
@@ -276,7 +276,7 @@ func nestedTree(t *testing.T) string {
 func TestResolveWithoutRecursiveStopsAtTheDirectory(t *testing.T) {
 	root := nestedTree(t)
 
-	got := resolve([]string{root}, false)
+	got := resolve([]string{root}, false, nil)
 
 	if len(got) != 1 || got[0] != root {
 		t.Fatalf("resolve = %v, want exactly %v", got, []string{root})
@@ -286,7 +286,7 @@ func TestResolveWithoutRecursiveStopsAtTheDirectory(t *testing.T) {
 func TestResolveRecursiveIncludesEverySubdirectory(t *testing.T) {
 	root := nestedTree(t)
 
-	got := resolve([]string{root}, true)
+	got := resolve([]string{root}, true, nil)
 
 	want := []string{
 		root,
@@ -303,7 +303,7 @@ func TestResolveRecursiveIncludesEverySubdirectory(t *testing.T) {
 func TestResolveRecursiveDoesNotListFiles(t *testing.T) {
 	root := nestedTree(t)
 
-	for _, path := range resolve([]string{root}, true) {
+	for _, path := range resolve([]string{root}, true, nil) {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
@@ -323,7 +323,7 @@ func TestResolveRecursiveDoesNotFollowSymlinks(t *testing.T) {
 	}
 
 	done := make(chan []string, 1)
-	go func() { done <- resolve([]string{root}, true) }()
+	go func() { done <- resolve([]string{root}, true, nil) }()
 
 	select {
 	case got := <-done:
@@ -446,4 +446,126 @@ func TestSuperviseStopsAtMaxWatches(t *testing.T) {
 	if got := strings.Count(logs.String(), "--max-watches"); got != 1 {
 		t.Fatalf("the limit was reported %d times, want once", got)
 	}
+}
+
+// --- excluding paths -------------------------------------------------------------
+
+func TestExcludedMatchesTheBaseNameWhenThePatternHasNoSeparator(t *testing.T) {
+	patterns := []string{"node_modules", "*.tmp"}
+
+	for _, path := range []string{
+		"/srv/app/node_modules",
+		"/deep/inside/a/tree/node_modules",
+		"/srv/app/build.tmp",
+	} {
+		if !excluded(patterns, path) {
+			t.Fatalf("excluded(%q) = false, want it covered by the base name", path)
+		}
+	}
+	for _, path := range []string{"/srv/app/src", "/srv/node_modules_old", "/srv/app/tmp"} {
+		if excluded(patterns, path) {
+			t.Fatalf("excluded(%q) = true, want it kept", path)
+		}
+	}
+}
+
+// A pattern with a separator stays specific to one place in the tree.
+func TestExcludedMatchesTheWholePathWhenThePatternHasASeparator(t *testing.T) {
+	patterns := []string{"/srv/app/tmp/*"}
+
+	if !excluded(patterns, "/srv/app/tmp/cache") {
+		t.Fatal("excluded did not cover a path under the excluded directory")
+	}
+	if excluded(patterns, "/srv/other/tmp/cache") {
+		t.Fatal("a path-anchored pattern matched somewhere else in the tree")
+	}
+}
+
+func TestExcludedWithNoPatterns(t *testing.T) {
+	if excluded(nil, "/anything") {
+		t.Fatal("excluded said yes with no patterns")
+	}
+}
+
+func TestResolveSkipsExcludedMatches(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"keep.log", "skip.log", "also.tmp"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := resolve([]string{filepath.Join(dir, "*")}, false, []string{"skip.log", "*.tmp"})
+
+	if len(got) != 1 || filepath.Base(got[0]) != "keep.log" {
+		t.Fatalf("resolve = %v, want only keep.log", got)
+	}
+}
+
+// Not descending into an excluded directory is most of the point: it is what keeps a
+// recursive watch off node_modules instead of merely not watching its top level.
+func TestResolveDoesNotDescendIntoAnExcludedDirectory(t *testing.T) {
+	root := t.TempDir()
+	buried := filepath.Join(root, "node_modules", "pkg", "deep")
+	if err := os.MkdirAll(buried, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := resolve([]string{root}, true, []string{"node_modules"})
+
+	want := []string{root, filepath.Join(root, "src")}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("resolve = %v, want %v", got, want)
+	}
+	for _, path := range got {
+		if strings.Contains(path, "node_modules") {
+			t.Fatalf("resolve descended into an excluded directory: %s", path)
+		}
+	}
+}
+
+func TestSuperviseDoesNotWatchExcludedPaths(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"keep.log", "skip.log"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := &pathRecorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logs := &safeBuffer{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Supervise(ctx, WatchConfig{
+			Patterns:   []string{filepath.Join(dir, "*.log")},
+			Interval:   10 * time.Millisecond,
+			MaxWatches: 64,
+			Exclude:    []string{"skip.log"},
+		}, rec.dispatch, logs.logger())
+	}()
+
+	waitFor(t, 2*time.Second, "EXIST for the kept file", func() bool { return rec.has("EXIST keep.log") })
+	time.Sleep(100 * time.Millisecond)
+
+	if rec.has("EXIST skip.log") {
+		t.Fatalf("an excluded path was watched (%s)", rec.all())
+	}
+
+	// The excluded file must stay excluded when it changes.
+	if err := os.WriteFile(filepath.Join(dir, "skip.log"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if rec.has("WRITE skip.log") {
+		t.Fatalf("an excluded path produced an event (%s)", rec.all())
+	}
+
+	cancel()
+	<-done
 }

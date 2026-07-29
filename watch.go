@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,6 +28,26 @@ func ValidatePatterns(patterns []string) error {
 	return nil
 }
 
+// excluded reports whether a path is covered by one of the exclude patterns.
+//
+// A pattern with no separator in it is matched against the base name, so
+// --exclude node_modules covers the directory wherever in the tree it turns up. One
+// with a separator is matched against the whole path, so --exclude '/srv/app/tmp/*'
+// stays specific to that place.
+func excluded(patterns []string, path string) bool {
+	base := filepath.Base(path)
+	for _, pattern := range patterns {
+		subject := base
+		if strings.ContainsRune(pattern, filepath.Separator) {
+			subject = path
+		}
+		if matched, err := filepath.Match(pattern, subject); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
 // WatchConfig is what Supervise needs to know about the paths it is keeping watchers on.
 type WatchConfig struct {
 	// Patterns are the -f values: files, directories or globs.
@@ -38,6 +59,9 @@ type WatchConfig struct {
 	// MaxWatches caps how many paths are watched at once, so a recursive watch over a
 	// large tree cannot exhaust the process's file descriptors.
 	MaxWatches int
+	// Exclude drops matching paths, and stops a recursive walk from descending into
+	// matching directories.
+	Exclude []string
 }
 
 // resolve returns the existing paths matched by the patterns, deduplicated and sorted.
@@ -48,7 +72,7 @@ type WatchConfig struct {
 // fsnotify does not recurse on its own, and watching a directory only reports its direct
 // children, so a tree has to be enumerated and watched a level at a time. Subdirectories
 // created later are picked up by the next resolve.
-func resolve(patterns []string, recursive bool) []string {
+func resolve(patterns []string, recursive bool, exclude []string) []string {
 	seen := make(map[string]bool)
 	var paths []string
 	add := func(path string) {
@@ -65,6 +89,9 @@ func resolve(patterns []string, recursive bool) []string {
 			continue
 		}
 		for _, match := range matches {
+			if excluded(exclude, match) {
+				continue
+			}
 			add(match)
 			if !recursive {
 				continue
@@ -80,9 +107,15 @@ func resolve(patterns []string, recursive bool) []string {
 					// An unreadable subdirectory is skipped, not fatal.
 					return fs.SkipDir
 				}
-				if entry.IsDir() {
-					add(path)
+				if !entry.IsDir() {
+					return nil
 				}
+				if excluded(exclude, path) {
+					// Not descended into either: skipping the walk is most of the
+					// point of excluding a directory like node_modules.
+					return fs.SkipDir
+				}
+				add(path)
 				return nil
 			})
 		}
@@ -164,7 +197,7 @@ func Supervise(ctx context.Context, cfg WatchConfig, dispatch Dispatch, logger *
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			present := resolve(cfg.Patterns, cfg.Recursive)
+			present := resolve(cfg.Patterns, cfg.Recursive, cfg.Exclude)
 			if cfg.MaxWatches > 0 && len(present) > cfg.MaxWatches {
 				if !capped {
 					logger.Errorf("%d paths match but the limit is %d: watching the first %d, raise --max-watches to cover the rest",

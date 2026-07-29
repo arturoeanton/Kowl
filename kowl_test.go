@@ -261,3 +261,14 @@ func TestPositionalArgumentAfterASeparatorIsAlsoRejected(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitUsage, stderr)
 	}
 }
+
+func TestBrokenExcludePatternIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "-x", "[unterminated")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "unterminated") {
+		t.Fatalf("stderr %q does not name the bad pattern", stderr)
+	}
+}

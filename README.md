@@ -27,12 +27,19 @@ Dependencies are pinned in `go.mod`; `go build` fetches them. Without a stamped 
 ./kowl -f 'logs/*.log' -f /etc/hosts -j example.js
 ./kowl -f ./config -j example.js            # a directory reports events for its files
 ./kowl -f ./src -r -j example.js            # and the whole tree below it
+./kowl -f . -r -x node_modules -x .git -j example.js
 ```
 
 `-f` takes a file, a directory or a glob and may be repeated. Each matching path gets
 its own watcher, and new matches are picked up as they appear. Watching the containing
 directory is the reliable way to catch editors that save by writing a new file and
 renaming it over the old one.
+
+`-x` skips paths. A pattern with no separator in it is matched against the base name, so
+`-x node_modules` covers that directory wherever in the tree it turns up; one with a
+separator is matched against the whole path, so `-x '/srv/app/tmp/*'` stays specific to
+that place. With `-r`, an excluded directory is not descended into at all, which is the
+difference between skipping `node_modules` and skipping only its top level.
 
 Watching a directory only reports its direct children, because fsnotify does not
 recurse. `-r` enumerates the tree instead and watches every directory in it, including
@@ -61,6 +68,8 @@ Application Options:
   -w, --flagNotWatcher  disable the filesystem watcher, leaving only polling
   -r, --recursive       watch every directory below a matched directory
       --max-watches=    how many paths may be watched at once (default: 4096)
+  -x, --exclude=        skip matching paths, repeatable; no separator matches
+                        the base name
       --debounce=       quiet period before a burst of write events runs a
                         hook, 0 disables (default: 200ms)
       --self-trigger    let a hook that writes an observed file wake itself
