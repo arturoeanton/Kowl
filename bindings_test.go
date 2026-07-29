@@ -323,3 +323,95 @@ func TestKCliHonoursTheHTTPTimeout(t *testing.T) {
 		t.Fatalf("Send() took %s, so --http-timeout did not apply", elapsed)
 	}
 }
+
+// evalJSWithLogger runs source in a VM whose script output is captured.
+func evalJSWithLogger(t *testing.T, level Level, source string) string {
+	t.Helper()
+	logs := &safeBuffer{}
+	cfg := defaultVMConfig()
+	cfg.logger = NewLogger(logs, level)
+	if _, err := newVM(cfg).Run(source); err != nil {
+		t.Fatalf("running script: %v\n%s", err, source)
+	}
+	return logs.String()
+}
+
+// otto's own console writes straight to stdout, which bypasses --log-level and leaves
+// script output on a different stream from Kowl's.
+func TestConsoleLogGoesThroughTheLogger(t *testing.T) {
+	got := evalJSWithLogger(t, LevelInfo, `console.log("hello", "world")`)
+
+	if !strings.Contains(got, "info") || !strings.Contains(got, "hello world") {
+		t.Fatalf("console.log produced %q, want an info line with both arguments", got)
+	}
+}
+
+func TestConsoleLevelsMapToLogLevels(t *testing.T) {
+	tests := []struct{ call, level string }{
+		{`console.debug("m")`, "debug"},
+		{`console.log("m")`, "info"},
+		{`console.info("m")`, "info"},
+		{`console.warn("m")`, "warn"},
+		{`console.error("m")`, "error"},
+		{`kDebug("m")`, "debug"},
+		{`kLog("m")`, "info"},
+		{`kWarn("m")`, "warn"},
+		{`kError("m")`, "error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.call, func(t *testing.T) {
+			got := evalJSWithLogger(t, LevelDebug, tt.call)
+			if !strings.Contains(got, tt.level+" ") {
+				t.Fatalf("%s logged %q, want level %s", tt.call, got, tt.level)
+			}
+		})
+	}
+}
+
+// --log-level now governs script output too.
+func TestScriptLoggingRespectsTheLogLevel(t *testing.T) {
+	got := evalJSWithLogger(t, LevelError, `
+		console.debug("dropped-debug")
+		console.log("dropped-info")
+		console.error("kept-error")`)
+
+	for _, unwanted := range []string{"dropped-debug", "dropped-info"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("an error-level logger kept %q:\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "kept-error") {
+		t.Fatalf("an error-level logger dropped the error:\n%s", got)
+	}
+}
+
+// A logged value containing a percent sign must not be treated as a format string.
+func TestScriptLoggingDoesNotInterpretFormatVerbs(t *testing.T) {
+	got := evalJSWithLogger(t, LevelInfo, `console.log("100% done %s %d")`)
+
+	if strings.Contains(got, "%!") {
+		t.Fatalf("the message was treated as a format string: %q", got)
+	}
+	if !strings.Contains(got, "100% done %s %d") {
+		t.Fatalf("logged %q, want the message verbatim", got)
+	}
+}
+
+// Objects should print as their contents, not as "[object Object]".
+func TestScriptLoggingRendersObjects(t *testing.T) {
+	got := evalJSWithLogger(t, LevelInfo, `console.log({name: "kowl"})`)
+
+	if strings.Contains(got, "[object Object]") {
+		t.Fatalf("an object logged as %q", got)
+	}
+	if !strings.Contains(got, "kowl") {
+		t.Fatalf("logged %q, want the object's contents", got)
+	}
+}
+
+func TestScriptLoggingHandlesNoArguments(t *testing.T) {
+	got := evalJSWithLogger(t, LevelInfo, `console.log()`)
+	if !strings.Contains(got, "info") {
+		t.Fatalf("console.log() produced %q, want an empty info line", got)
+	}
+}

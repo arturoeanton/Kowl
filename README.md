@@ -67,7 +67,7 @@ Application Options:
       --http-timeout=   how long a kCli request may take (default: 30s)
       --max-output=     bytes of stdout and of stderr kept per kExec command
                         (default: 1048576)
-      --log-level=      debug, info or error (default: info)
+      --log-level=      debug, info, warn or error (default: info)
 
 Help Options:
   -h, --help            Show this help message
@@ -236,6 +236,24 @@ console.log("Body:", res[0].String())
 `kBodyJSON`, `kBodyXML` and `kBodyString` build request bodies. Requests time out after
 `--http-timeout`. These are the Go objects exposed directly, so `Send()` returns Go's
 `(response, error)` pair as a two-element array.
+
+#### Logging
+
+> `kDebug(...)` `kLog(...)` `kWarn(...)` `kError(...)`
+
+`console.log`, `console.info`, `console.debug`, `console.warn` and `console.error` are
+wired to the same place. Everything a script logs goes through Kowl's own output:
+timestamped, level-prefixed, on stderr, and filtered by `--log-level`. Arguments are
+joined with spaces and objects print as their contents.
+
+```js
+function write(name, op, event) {
+    kDebug("woken for", event.name)
+    if (event.size === 0) {
+        kWarn(event.name, "is empty")
+    }
+}
+```
 
 #### Operating system
 

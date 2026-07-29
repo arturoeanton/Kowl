@@ -29,9 +29,10 @@ func TestLoggerDropsMessagesBelowItsLevel(t *testing.T) {
 		want  []string
 		skip  []string
 	}{
-		{LevelDebug, []string{"a debug", "an info", "an error"}, nil},
-		{LevelInfo, []string{"an info", "an error"}, []string{"a debug"}},
-		{LevelError, []string{"an error"}, []string{"a debug", "an info"}},
+		{LevelDebug, []string{"a debug", "an info", "a warn", "an error"}, nil},
+		{LevelInfo, []string{"an info", "a warn", "an error"}, []string{"a debug"}},
+		{LevelWarn, []string{"a warn", "an error"}, []string{"a debug", "an info"}},
+		{LevelError, []string{"an error"}, []string{"a debug", "an info", "a warn"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.level.String(), func(t *testing.T) {
@@ -39,6 +40,7 @@ func TestLoggerDropsMessagesBelowItsLevel(t *testing.T) {
 			logger := fixedLogger(out, tt.level)
 			logger.Debugf("a debug")
 			logger.Infof("an info")
+			logger.Warnf("a warn")
 			logger.Errorf("an error")
 
 			got := out.String()
@@ -86,6 +88,7 @@ func TestParseLevel(t *testing.T) {
 	}{
 		{"debug", LevelDebug},
 		{"info", LevelInfo},
+		{"warn", LevelWarn},
 		{"error", LevelError},
 		{"INFO", LevelInfo},
 		{"Error", LevelError},

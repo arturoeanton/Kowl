@@ -14,8 +14,10 @@ type Level int
 const (
 	// LevelDebug reports every event, including the ones Kowl decided to ignore.
 	LevelDebug Level = iota
-	// LevelInfo reports lifecycle messages and anything unexpected.
+	// LevelInfo reports lifecycle messages and whatever a script logs.
 	LevelInfo
+	// LevelWarn reports something a script or Kowl wants attention for.
+	LevelWarn
 	// LevelError reports only failures.
 	LevelError
 )
@@ -23,6 +25,7 @@ const (
 var levelNames = map[Level]string{
 	LevelDebug: "debug",
 	LevelInfo:  "info",
+	LevelWarn:  "warn",
 	LevelError: "error",
 }
 
@@ -40,7 +43,7 @@ func ParseLevel(name string) (Level, error) {
 			return level, nil
 		}
 	}
-	return LevelInfo, fmt.Errorf("unknown log level %q, want debug, info or error", name)
+	return LevelInfo, fmt.Errorf("unknown log level %q, want debug, info, warn or error", name)
 }
 
 // Logger writes timestamped, level-prefixed lines. A Kowl process logs from the
@@ -62,6 +65,9 @@ func (l *Logger) Debugf(format string, args ...interface{}) { l.printf(LevelDebu
 
 // Infof reports normal progress.
 func (l *Logger) Infof(format string, args ...interface{}) { l.printf(LevelInfo, format, args...) }
+
+// Warnf reports something worth attention that is not a failure.
+func (l *Logger) Warnf(format string, args ...interface{}) { l.printf(LevelWarn, format, args...) }
 
 // Errorf reports a failure. Kowl keeps running after one.
 func (l *Logger) Errorf(format string, args ...interface{}) { l.printf(LevelError, format, args...) }

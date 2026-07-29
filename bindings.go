@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/robertkrimen/otto"
@@ -28,6 +29,9 @@ type vmConfig struct {
 	execTimeout time.Duration
 	httpTimeout time.Duration
 	maxOutput   int
+	// logger receives everything a script logs. Script output goes through the same
+	// leveled, timestamped stream as Kowl's own, so --log-level governs both.
+	logger *Logger
 }
 
 func defaultVMConfig() vmConfig {
@@ -35,6 +39,7 @@ func defaultVMConfig() vmConfig {
 		execTimeout: defaultExecTimeout,
 		httpTimeout: defaultHTTPTimeout,
 		maxOutput:   defaultMaxOutput,
+		logger:      NewLogger(os.Stderr, LevelInfo),
 	}
 }
 
@@ -76,12 +81,62 @@ func newVM(cfg vmConfig) *otto.Otto {
 		"kArgs":     os.Args,
 
 		"kNow": time.Now,
+
+		"kDebug": bindLog(cfg.logger.Debugf),
+		"kLog":   bindLog(cfg.logger.Infof),
+		"kWarn":  bindLog(cfg.logger.Warnf),
+		"kError": bindLog(cfg.logger.Errorf),
 	}
 	for name, value := range bindings {
 		// Set only fails on an invalid identifier, and every name here is a literal.
 		_ = vm.Set(name, value)
 	}
+	bindConsole(vm, cfg.logger)
 	return vm
+}
+
+// bindConsole routes console.log and friends through Kowl's logger. otto's own console
+// writes straight to stdout, which bypasses --log-level and leaves script output
+// untimestamped and interleaved with Kowl's on a different stream.
+func bindConsole(vm *otto.Otto, logger *Logger) {
+	console, err := vm.Object(`console = {}`)
+	if err != nil {
+		return
+	}
+	for name, write := range map[string]func(string, ...interface{}){
+		"debug": logger.Debugf,
+		"log":   logger.Infof,
+		"info":  logger.Infof,
+		"warn":  logger.Warnf,
+		"error": logger.Errorf,
+	} {
+		_ = console.Set(name, bindLog(write))
+	}
+}
+
+// bindLog adapts a logger method into a JavaScript function that joins its arguments
+// with spaces, the way console.log does.
+func bindLog(write func(string, ...interface{})) func(otto.FunctionCall) otto.Value {
+	return func(call otto.FunctionCall) otto.Value {
+		parts := make([]string, 0, len(call.ArgumentList))
+		for _, arg := range call.ArgumentList {
+			parts = append(parts, describe(arg))
+		}
+		// The message is already assembled, so it must not be treated as a format.
+		write("%s", strings.Join(parts, " "))
+		return otto.UndefinedValue()
+	}
+}
+
+// describe renders one logged value. Objects and arrays are exported so they print as
+// their contents rather than as "[object Object]".
+func describe(value otto.Value) string {
+	if value.IsObject() {
+		if exported, err := value.Export(); err == nil {
+			return fmt.Sprintf("%v", exported)
+		}
+	}
+	return value.String()
 }
 
 func bindExec(cfg vmConfig) func(otto.FunctionCall) otto.Value {

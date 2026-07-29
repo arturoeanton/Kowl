@@ -40,7 +40,7 @@ type options struct {
 	ExecTimeout    time.Duration `long:"exec-timeout" default:"60s" description:"how long a kExec command may run"`
 	HTTPTimeout    time.Duration `long:"http-timeout" default:"30s" description:"how long a kCli request may take"`
 	MaxOutput      int           `long:"max-output" default:"1048576" description:"bytes of stdout and of stderr kept per kExec command"`
-	LogLevel       string        `long:"log-level" default:"info" description:"debug, info or error"`
+	LogLevel       string        `long:"log-level" default:"info" description:"debug, info, warn or error"`
 }
 
 func init() {
@@ -110,12 +110,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	logger := NewLogger(stderr, level)
+
 	runner := NewRunner(opts.Script)
 	runner.timeout = opts.HookTimeout
 	runner.config = vmConfig{
 		execTimeout: opts.ExecTimeout,
 		httpTimeout: opts.HTTPTimeout,
 		maxOutput:   opts.MaxOutput,
+		logger:      logger,
 	}
 
 	hooks, err := runner.DefinedHooks()
@@ -128,7 +131,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	logger := NewLogger(stderr, level)
 	logger.Infof("watching %s with %s (hooks: %s)",
 		strings.Join(opts.Filename, ", "), opts.Script, strings.Join(hooks, ", "))
 
