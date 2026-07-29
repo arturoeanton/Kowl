@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -46,18 +47,51 @@ func ParseLevel(name string) (Level, error) {
 	return LevelInfo, fmt.Errorf("unknown log level %q, want debug, info, warn or error", name)
 }
 
-// Logger writes timestamped, level-prefixed lines. A Kowl process logs from the
-// watcher, the poller and the debounce timers at once, so writes are serialised.
+// Format is how a Logger renders a line.
+type Format int
+
+const (
+	// FormatText is one human-readable line per message.
+	FormatText Format = iota
+	// FormatJSON is one JSON object per line, for log collectors.
+	FormatJSON
+)
+
+var formatNames = map[Format]string{
+	FormatText: "text",
+	FormatJSON: "json",
+}
+
+func (f Format) String() string {
+	if name, ok := formatNames[f]; ok {
+		return name
+	}
+	return fmt.Sprintf("Format(%d)", int(f))
+}
+
+// ParseFormat converts a format name such as "json" into a Format.
+func ParseFormat(name string) (Format, error) {
+	for format, candidate := range formatNames {
+		if strings.EqualFold(name, candidate) {
+			return format, nil
+		}
+	}
+	return FormatText, fmt.Errorf("unknown log format %q, want text or json", name)
+}
+
+// Logger writes timestamped, leveled lines. A Kowl process logs from the watcher, the
+// poller and the debounce timers at once, so writes are serialised.
 type Logger struct {
-	mu    sync.Mutex
-	out   io.Writer
-	level Level
-	now   func() time.Time
+	mu     sync.Mutex
+	out    io.Writer
+	level  Level
+	format Format
+	now    func() time.Time
 }
 
 // NewLogger returns a Logger writing to out, dropping anything below level.
-func NewLogger(out io.Writer, level Level) *Logger {
-	return &Logger{out: out, level: level, now: time.Now}
+func NewLogger(out io.Writer, level Level, format Format) *Logger {
+	return &Logger{out: out, level: level, format: format, now: time.Now}
 }
 
 // Debugf reports detail that is only useful when diagnosing what Kowl is doing.
@@ -76,8 +110,29 @@ func (l *Logger) printf(level Level, format string, args ...interface{}) {
 	if level < l.level {
 		return
 	}
-	message := fmt.Sprintf(format, args...)
+	entry := logEntry{
+		Time:    l.now().Format(time.RFC3339),
+		Level:   level.String(),
+		Message: fmt.Sprintf(format, args...),
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Fprintf(l.out, "%s %-5s %s\n", l.now().Format(time.RFC3339), level, message)
+
+	if l.format == FormatJSON {
+		// Marshal cannot fail for three strings, but a partial line would be worse
+		// than none, so only write what encoded.
+		if encoded, err := json.Marshal(entry); err == nil {
+			l.out.Write(append(encoded, '\n'))
+		}
+		return
+	}
+	fmt.Fprintf(l.out, "%s %-5s %s\n", entry.Time, entry.Level, entry.Message)
+}
+
+// logEntry is one line, in the shape the JSON format writes.
+type logEntry struct {
+	Time    string `json:"time"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
 }

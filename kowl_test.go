@@ -226,3 +226,14 @@ func TestNonPositiveMaxWatchesIsUsageError(t *testing.T) {
 		t.Fatalf("stderr %q does not name the flag", stderr)
 	}
 }
+
+func TestUnknownLogFormatIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "--log-format", "logfmt")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "logfmt") {
+		t.Fatalf("stderr %q does not name the rejected format", stderr)
+	}
+}

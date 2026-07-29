@@ -39,7 +39,7 @@ func defaultVMConfig() vmConfig {
 		execTimeout: defaultExecTimeout,
 		httpTimeout: defaultHTTPTimeout,
 		maxOutput:   defaultMaxOutput,
-		logger:      NewLogger(os.Stderr, LevelInfo),
+		logger:      NewLogger(os.Stderr, LevelInfo, FormatText),
 	}
 }
 

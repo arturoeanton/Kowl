@@ -36,12 +36,12 @@ func (s *safeBuffer) String() string {
 // logger returns a Logger that keeps everything, so tests can assert on what was
 // reported as well as on what was dispatched.
 func (s *safeBuffer) logger() *Logger {
-	return NewLogger(s, LevelDebug)
+	return NewLogger(s, LevelDebug, FormatText)
 }
 
 // errorLogger keeps only failures, for tests asserting that nothing went wrong.
 func (s *safeBuffer) errorLogger() *Logger {
-	return NewLogger(s, LevelError)
+	return NewLogger(s, LevelError, FormatText)
 }
 
 // recorder records dispatched operations.

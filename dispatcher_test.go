@@ -43,7 +43,7 @@ func (c *calls) all() string {
 
 func TestDispatchPassesUndebouncedOpsStraightThrough(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 50*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 50*time.Millisecond, false)
 	defer d.Close()
 
 	for _, op := range []string{"EXIST", "TICKER", "NOT_FOUND", "REMOVE", "RENAME"} {
@@ -58,7 +58,7 @@ func TestDispatchPassesUndebouncedOpsStraightThrough(t *testing.T) {
 // A single editor save emits several write events; the hook should run once.
 func TestDispatchCollapsesABurstOfWrites(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 60*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 60*time.Millisecond, false)
 	defer d.Close()
 
 	for i := 0; i < 10; i++ {
@@ -76,7 +76,7 @@ func TestDispatchCollapsesABurstOfWrites(t *testing.T) {
 // Debouncing must delay, not drop: the hook still runs after the burst settles.
 func TestDispatchRunsAfterTheBurstSettles(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 40*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 40*time.Millisecond, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", "/tmp/observed")
@@ -88,7 +88,7 @@ func TestDispatchRunsAfterTheBurstSettles(t *testing.T) {
 
 func TestDispatchKeepsSeparateFilesApart(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 40*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 40*time.Millisecond, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", "/tmp/one")
@@ -102,7 +102,7 @@ func TestDispatchKeepsSeparateFilesApart(t *testing.T) {
 
 func TestDispatchWithoutDebounceRunsImmediately(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", "/tmp/observed")
@@ -122,7 +122,7 @@ func TestDispatchIgnoresEventsCausedByTheHookItself(t *testing.T) {
 	recorded := &calls{hook: func(op, name string) error {
 		return os.WriteFile(name, []byte("rewritten by the hook"), 0o644)
 	}}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	defer d.Close()
 
 	// The first event is genuine and runs the hook, which rewrites the file. The next
@@ -146,7 +146,7 @@ func TestDispatchStillRunsAfterSomethingElseChangesTheFile(t *testing.T) {
 	recorded := &calls{hook: func(op, name string) error {
 		return os.WriteFile(name, []byte("rewritten by the hook"), 0o644)
 	}}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", file)
@@ -172,7 +172,7 @@ func TestDispatchSelfTriggerFlagDisablesSuppression(t *testing.T) {
 	recorded := &calls{hook: func(op, name string) error {
 		return os.WriteFile(name, []byte("rewritten"), 0o644)
 	}}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, true)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, true)
 	defer d.Close()
 
 	d.Dispatch("WRITE", file)
@@ -191,7 +191,7 @@ func TestDispatchDoesNotSuppressWhenTheHookChangesNothing(t *testing.T) {
 	}
 
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", file)
@@ -213,7 +213,7 @@ func TestDispatchNeverSuppressesTicker(t *testing.T) {
 	recorded := &calls{hook: func(op, name string) error {
 		return os.WriteFile(name, []byte(time.Now().String()), 0o644)
 	}}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
 	defer d.Close()
 
 	for i := 0; i < 3; i++ {
@@ -228,7 +228,7 @@ func TestDispatchNeverSuppressesTicker(t *testing.T) {
 func TestDispatchReportsHookFailures(t *testing.T) {
 	logs := &safeBuffer{}
 	recorded := &calls{hook: func(op, name string) error { return errors.New("hook exploded") }}
-	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo, FormatText), 0, false)
 	defer d.Close()
 
 	d.Dispatch("WRITE", "/tmp/observed")
@@ -244,7 +244,7 @@ func TestDispatchDoesNotReportUndefinedHooksAsErrors(t *testing.T) {
 	recorded := &calls{hook: func(op, name string) error {
 		return fmt.Errorf("chmod(): %w", ErrHookNotDefined)
 	}}
-	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo), 0, false)
+	d := newDispatcher(recorded.run, NewLogger(logs, LevelInfo, FormatText), 0, false)
 	defer d.Close()
 
 	d.Dispatch("CHMOD", "/tmp/observed")
@@ -257,7 +257,7 @@ func TestDispatchDoesNotReportUndefinedHooksAsErrors(t *testing.T) {
 // Close must not leave a debounce timer to fire into a shutting-down process.
 func TestCloseCancelsPendingEvents(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), time.Second, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), time.Second, false)
 
 	d.Dispatch("WRITE", "/tmp/observed")
 	d.Close()
@@ -280,7 +280,7 @@ func TestCloseWaitsForARunningHook(t *testing.T) {
 		close(finished)
 		return nil
 	}}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 10*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 10*time.Millisecond, false)
 
 	d.Dispatch("WRITE", "/tmp/observed")
 	<-started
@@ -295,7 +295,7 @@ func TestCloseWaitsForARunningHook(t *testing.T) {
 
 func TestDispatchAfterCloseIsANoOp(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 10*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 10*time.Millisecond, false)
 	d.Close()
 
 	d.Dispatch("WRITE", "/tmp/observed")
@@ -309,7 +309,7 @@ func TestDispatchAfterCloseIsANoOp(t *testing.T) {
 // Events arrive from the watcher and the poller at the same time.
 func TestDispatchIsSafeForConcurrentUse(t *testing.T) {
 	recorded := &calls{}
-	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError), 20*time.Millisecond, false)
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 20*time.Millisecond, false)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {

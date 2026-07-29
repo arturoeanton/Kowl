@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +36,7 @@ func TestEndToEndWatchAndDispatch(t *testing.T) {
 	}
 
 	logs := &safeBuffer{}
-	logger := NewLogger(logs, LevelError)
+	logger := NewLogger(logs, LevelError, FormatText)
 	events := newDispatcher(runner.Run, logger, 20*time.Millisecond, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,7 +105,7 @@ func TestEndToEndHookRewritingTheObservedFileSettles(t *testing.T) {
 		}`)
 
 	runner := NewRunner(script)
-	logger := NewLogger(&safeBuffer{}, LevelError)
+	logger := NewLogger(&safeBuffer{}, LevelError, FormatText)
 	events := newDispatcher(runner.Run, logger, 20*time.Millisecond, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,4 +212,67 @@ func journalOf(t *testing.T, path string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// The whole process, including whatever a script logs, must be parseable as JSON when
+// --log-format json is set.
+func TestBinaryEmitsParseableJSONLogs(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "kowl")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("building kowl: %v\n%s", err, out)
+	}
+
+	observed := filepath.Join(dir, "observed.txt")
+	if err := os.WriteFile(observed, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := writeScript(t, `function exist(name, op) { console.log("from the script") }`)
+
+	cmd := exec.Command(binary, "-f", observed, "-j", script, "-m", "0", "--log-format", "json")
+	var output safeBuffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting kowl: %v", err)
+	}
+
+	waitFor(t, 5*time.Second, "the script to log", func() bool {
+		return strings.Contains(output.String(), "from the script")
+	})
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("kowl exited with %v\n%s", err, output.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("got %d lines, want the startup, script and shutdown lines:\n%s", len(lines), output.String())
+	}
+	sawScript := false
+	for i, line := range lines {
+		var entry struct {
+			Time    string `json:"time"`
+			Level   string `json:"level"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("line %d is not JSON: %v\n%s", i, err, line)
+		}
+		if entry.Time == "" || entry.Level == "" {
+			t.Fatalf("line %d is missing time or level: %s", i, line)
+		}
+		if entry.Message == "from the script" {
+			sawScript = true
+		}
+	}
+	if !sawScript {
+		t.Fatalf("the script's own line was not one of the JSON objects:\n%s", output.String())
+	}
 }

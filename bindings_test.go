@@ -329,7 +329,7 @@ func evalJSWithLogger(t *testing.T, level Level, source string) string {
 	t.Helper()
 	logs := &safeBuffer{}
 	cfg := defaultVMConfig()
-	cfg.logger = NewLogger(logs, level)
+	cfg.logger = NewLogger(logs, level, FormatText)
 	if _, err := newVM(cfg).Run(source); err != nil {
 		t.Fatalf("running script: %v\n%s", err, source)
 	}

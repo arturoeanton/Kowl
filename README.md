@@ -72,6 +72,7 @@ Application Options:
       --max-output=     bytes of stdout and of stderr kept per kExec command
                         (default: 1048576)
       --log-level=      debug, info, warn or error (default: info)
+      --log-format=     text or json (default: text)
   -V, --version         print the version and exit
 
 Help Options:
@@ -332,6 +333,21 @@ console.log(kGetEnv("VAR"), kHostname(), kNow())
 ```js
 var stooges = [{name: 'moe', age: 40}, {name: 'larry', age: 50}]
 console.log(_.pluck(stooges, 'name'))
+```
+
+## Output
+
+Everything Kowl and its scripts report goes to stderr, timestamped and leveled:
+
+```
+2026-07-29T10:15:04-03:00 info  watching /tmp/foo with example.js (hooks: exist, write)
+2026-07-29T10:15:07-03:00 info  WRITE /tmp/foo 12 bytes
+```
+
+`--log-format json` writes one object per line instead, for a collector to pick up:
+
+```json
+{"time":"2026-07-29T10:15:07-03:00","level":"info","message":"WRITE /tmp/foo 12 bytes"}
 ```
 
 ## Tests

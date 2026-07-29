@@ -41,6 +41,7 @@ type options struct {
 	HTTPTimeout    time.Duration `long:"http-timeout" default:"30s" description:"how long a kCli request may take"`
 	MaxOutput      int           `long:"max-output" default:"1048576" description:"bytes of stdout and of stderr kept per kExec command"`
 	LogLevel       string        `long:"log-level" default:"info" description:"debug, info, warn or error"`
+	LogFormat      string        `long:"log-format" default:"text" description:"text or json"`
 	Version        bool          `short:"V" long:"version" description:"print the version and exit"`
 }
 
@@ -83,6 +84,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
+	format, err := ParseFormat(opts.LogFormat)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	if opts.Interval < 0 {
 		fmt.Fprintln(stderr, "-m must be zero or positive")
 		return exitUsage
@@ -118,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	logger := NewLogger(stderr, level)
+	logger := NewLogger(stderr, level, format)
 
 	runner := NewRunner(opts.Script)
 	runner.timeout = opts.HookTimeout
