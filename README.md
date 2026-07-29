@@ -25,7 +25,10 @@ no Node.js, no npm and no `require` — one static binary and one `.js` file.
 go install github.com/arturoeanton/Kowl@latest
 ```
 
-or from a clone:
+That puts a binary called `Kowl` in `$GOBIN`, named after the repository. Rename it if you
+would rather type `kowl`.
+
+Or from a clone:
 
 ```
 go build -o kowl .
@@ -553,8 +556,9 @@ go build -o kowl .                                     # from a clone
 go build -ldflags "-X main.version=1.2.0" -o kowl .    # stamp a release version
 ```
 
-Dependencies are pinned in `go.mod`. Without a stamped version, `kowl --version` falls
-back to the commit Go records in the binary, and says so when the tree was dirty.
+Dependencies are pinned in `go.mod`. Without a stamped version, `--version` reports the
+module version when the binary came from `go install`, or the commit Go records when it
+came from a clone, and says so when the tree was dirty.
 
 ```
 go test ./...                  # everything

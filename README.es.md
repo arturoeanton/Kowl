@@ -26,7 +26,10 @@ npm, ni `require` — un binario estático y un archivo `.js`.
 go install github.com/arturoeanton/Kowl@latest
 ```
 
-o desde un clon:
+Eso deja un binario llamado `Kowl` en `$GOBIN`, con el nombre del repositorio. Renombralo
+si preferís escribir `kowl`.
+
+O desde un clon:
 
 ```
 go build -o kowl .
@@ -559,8 +562,9 @@ go build -o kowl .                                     # desde un clon
 go build -ldflags "-X main.version=1.2.0" -o kowl .    # estampar una versión de release
 ```
 
-Las dependencias están fijadas en `go.mod`. Sin una versión estampada, `kowl --version` cae
-al commit que Go graba en el binario, y avisa si el árbol estaba sucio.
+Las dependencias están fijadas en `go.mod`. Sin una versión estampada, `--version` reporta
+la versión del módulo cuando el binario vino de `go install`, o el commit que Go graba
+cuando vino de un clon, y avisa si el árbol estaba sucio.
 
 ```
 go test ./...                  # todo

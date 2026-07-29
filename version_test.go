@@ -36,6 +36,22 @@ func TestVersionStringAlwaysIdentifiesTheBuild(t *testing.T) {
 	}
 }
 
+// A build from go install carries the module version rather than a commit, and saying
+// "(devel)" there tells nobody which build is running.
+func TestVersionStringPrefersTheModuleVersionOverDevel(t *testing.T) {
+	_, moduleVersion, revision, _ := buildDetails()
+
+	// Under `go test` the binary reports neither, which is the case the fallbacks are
+	// for; assert the shape rather than a value the test environment cannot provide.
+	got := versionString()
+	if moduleVersion != "" && moduleVersion != "(devel)" && !strings.Contains(got, moduleVersion) {
+		t.Fatalf("versionString = %q, want the module version %q", got, moduleVersion)
+	}
+	if moduleVersion == "(devel)" && revision != "" && !strings.Contains(got, shortRevision(revision)) {
+		t.Fatalf("versionString = %q, want the commit when the module version says devel", got)
+	}
+}
+
 func TestShortRevisionAbbreviatesAHash(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"1234567890abcdef1234567890abcdef12345678", "1234567890ab"},

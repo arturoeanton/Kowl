@@ -16,12 +16,16 @@ var version = ""
 
 // versionString describes this build in one line.
 func versionString() string {
-	name, revision, modified := buildDetails()
+	name, moduleVersion, revision, modified := buildDetails()
 
 	parts := []string{"kowl"}
 	switch {
 	case version != "":
 		parts = append(parts, version)
+	case moduleVersion != "" && moduleVersion != "(devel)":
+		// Installed with go install: Go records the module version rather than the
+		// commit, and the pseudo-version carries the commit anyway.
+		parts = append(parts, moduleVersion)
 	case revision != "":
 		parts = append(parts, shortRevision(revision))
 	default:
@@ -37,14 +41,15 @@ func versionString() string {
 	return strings.Join(parts, " ")
 }
 
-// buildDetails reads what the toolchain recorded in the binary: the module path, the
-// commit it was built from, and whether the tree was dirty at the time.
-func buildDetails() (module, revision string, modified bool) {
+// buildDetails reads what the toolchain recorded in the binary: the module path and
+// version, the commit it was built from, and whether the tree was dirty at the time.
+// A build from a clone has the commit; one from go install has the module version.
+func buildDetails() (module, moduleVersion, revision string, modified bool) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
-		return "", "", false
+		return "", "", "", false
 	}
-	module = info.Main.Path
+	module, moduleVersion = info.Main.Path, info.Main.Version
 	for _, setting := range info.Settings {
 		switch setting.Key {
 		case "vcs.revision":
@@ -53,7 +58,7 @@ func buildDetails() (module, revision string, modified bool) {
 			modified = setting.Value == "true"
 		}
 	}
-	return module, revision, modified
+	return module, moduleVersion, revision, modified
 }
 
 // shortRevision abbreviates a commit hash the way git does.
