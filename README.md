@@ -11,9 +11,11 @@ no Node.js, no npm and no `require`.
 
 ```
 go build -o kowl .
+go build -ldflags "-X main.version=1.2.0" -o kowl .   # stamp a release version
 ```
 
-Dependencies are pinned in `go.mod`; `go build` fetches them.
+Dependencies are pinned in `go.mod`; `go build` fetches them. Without a stamped version
+`kowl --version` falls back to the commit Go records in the binary.
 
 ## Run
 
@@ -37,6 +39,8 @@ subdirectories created later. Symlinks are not followed, so a link pointing back
 tree cannot loop. `--max-watches` caps how many paths are watched at once so a recursive
 watch over a large tree cannot exhaust the process's file descriptors; hitting it is
 reported once.
+
+`kowl --version` prints the build and exits, without needing `-f` or `-j`.
 
 Kowl runs until it is interrupted, and stops cleanly on Ctrl-C or SIGTERM. It exits `0`
 on a clean shutdown or `--help`, `1` when the script cannot be loaded, and `2` on a
@@ -68,6 +72,7 @@ Application Options:
       --max-output=     bytes of stdout and of stderr kept per kExec command
                         (default: 1048576)
       --log-level=      debug, info, warn or error (default: info)
+  -V, --version         print the version and exit
 
 Help Options:
   -h, --help            Show this help message

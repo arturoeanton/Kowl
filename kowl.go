@@ -41,6 +41,7 @@ type options struct {
 	HTTPTimeout    time.Duration `long:"http-timeout" default:"30s" description:"how long a kCli request may take"`
 	MaxOutput      int           `long:"max-output" default:"1048576" description:"bytes of stdout and of stderr kept per kExec command"`
 	LogLevel       string        `long:"log-level" default:"info" description:"debug, info, warn or error"`
+	Version        bool          `short:"V" long:"version" description:"print the version and exit"`
 }
 
 func init() {
@@ -58,6 +59,13 @@ func main() {
 // interrupted. It returns the exit code instead of calling os.Exit so that argument
 // handling is testable.
 func run(args []string, stdout, stderr io.Writer) int {
+	// Checked before parsing: -f and -j are required, and asking a program for its
+	// version should not require telling it what to watch.
+	if wantsVersion(args) {
+		fmt.Fprintln(stdout, versionString())
+		return exitOK
+	}
+
 	var opts options
 	parser := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash)
 	if _, err := parser.ParseArgs(args); err != nil {
