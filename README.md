@@ -173,6 +173,21 @@ if (out.code !== 0) {
 }
 ```
 
+A trailing object is options rather than another argument:
+
+```js
+kExec("git", "status", "--short", {
+    dir:   "/srv/repo",             // working directory
+    env:   {LANG: "C"},             // added to Kowl's environment, overriding on conflict
+    stdin: "input for the command"
+})
+```
+
+`env` is added to the environment Kowl already has rather than replacing it, so a
+command never silently loses `PATH`. Arguments are passed to the command directly, with
+no shell in between: use `kExec("sh", "-c", ...)` if you want one, and remember what that
+means for anything interpolated into the string.
+
 #### kFileToString
 
 > `kFileToString(filename) -> string`

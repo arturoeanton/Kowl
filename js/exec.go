@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 )
 
 // ExecResult is the outcome of a command that ran to completion.
@@ -19,14 +21,38 @@ type ExecResult struct {
 	Truncated bool
 }
 
+// ExecOptions adjusts how a command runs.
+type ExecOptions struct {
+	// Dir is the working directory. Empty means the one Kowl was started in.
+	Dir string
+	// Env is added to the environment Kowl itself has, overriding on conflict. It is
+	// added rather than replacing so a command does not silently lose PATH.
+	Env map[string]string
+	// Stdin is fed to the command. Empty means no input.
+	Stdin string
+	// Limit caps the bytes kept from each of stdout and stderr.
+	Limit int
+}
+
 // Exec runs name with arg and returns its output. An error is returned only when the
 // command could not be run at all, or when ctx expired before it finished.
-func Exec(ctx context.Context, limit int, name string, arg ...string) (ExecResult, error) {
+func Exec(ctx context.Context, opts ExecOptions, name string, arg ...string) (ExecResult, error) {
 	cmd := exec.CommandContext(ctx, name, arg...)
-	stdout := &limitedBuffer{limit: limit}
-	stderr := &limitedBuffer{limit: limit}
+	stdout := &limitedBuffer{limit: opts.Limit}
+	stderr := &limitedBuffer{limit: opts.Limit}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	cmd.Dir = opts.Dir
+	if opts.Stdin != "" {
+		cmd.Stdin = strings.NewReader(opts.Stdin)
+	}
+	if len(opts.Env) > 0 {
+		environment := os.Environ()
+		for key, value := range opts.Env {
+			environment = append(environment, key+"="+value)
+		}
+		cmd.Env = environment
+	}
 
 	err := cmd.Run()
 	result := ExecResult{

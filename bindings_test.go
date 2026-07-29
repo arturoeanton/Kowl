@@ -580,3 +580,66 @@ func TestKCopyFileThrowsOnAMissingSource(t *testing.T) {
 	dir := t.TempDir()
 	evalJSError(t, `kCopyFile(`+quote(filepath.Join(dir, "missing"))+`, `+quote(filepath.Join(dir, "copy"))+`)`)
 }
+
+func TestKExecAcceptsAWorkingDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	value := evalJS(t, `kExec("pwd", {dir: `+quote(dir)+`}).stdout`)
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(strings.TrimSpace(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != want {
+		t.Fatalf("kExec ran in %q, want %q", resolved, want)
+	}
+}
+
+func TestKExecAcceptsEnvAndStdin(t *testing.T) {
+	value := evalJS(t, `
+		var out = kExec("sh", "-c", "read line; echo $GREETING $line", {
+			env: {GREETING: "hola"},
+			stdin: "mundo\n"
+		});
+		out.stdout.trim()`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "hola mundo" {
+		t.Fatalf("kExec produced %q, want %q", got, "hola mundo")
+	}
+}
+
+// The options object is only recognised in the last position, so a string argument that
+// happens to be last is still an argument.
+func TestKExecTreatsTrailingStringsAsArguments(t *testing.T) {
+	value := evalJS(t, `kExec("echo", "dir", "env", "stdin").stdout.trim()`)
+
+	got, err := value.ToString()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "dir env stdin" {
+		t.Fatalf("kExec produced %q, want the three arguments", got)
+	}
+}
+
+func TestKExecRejectsAnUnknownOption(t *testing.T) {
+	err := evalJSError(t, `kExec("echo", "hi", {shell: true})`)
+	if !strings.Contains(err.Error(), "shell") {
+		t.Fatalf("error %q does not name the unknown option", err)
+	}
+}
+
+func TestKExecRejectsANonObjectEnv(t *testing.T) {
+	evalJSError(t, `kExec("echo", "hi", {env: "LANG=C"})`)
+}

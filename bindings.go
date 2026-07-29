@@ -148,6 +148,41 @@ func describe(value otto.Value) string {
 	return value.String()
 }
 
+// execOptions reads the optional trailing object of kExec.
+func execOptions(call otto.FunctionCall, value otto.Value, limit int) js.ExecOptions {
+	opts := js.ExecOptions{Limit: limit}
+
+	exported, err := value.Export()
+	if err != nil {
+		throwf(call.Otto, "kExec: options must be an object: %v", err)
+	}
+	fields, ok := exported.(map[string]interface{})
+	if !ok {
+		throwf(call.Otto, "kExec: options must be an object, got %T", exported)
+	}
+
+	for key, field := range fields {
+		switch key {
+		case "dir":
+			opts.Dir = fmt.Sprintf("%v", field)
+		case "stdin":
+			opts.Stdin = fmt.Sprintf("%v", field)
+		case "env":
+			environment, ok := field.(map[string]interface{})
+			if !ok {
+				throwf(call.Otto, "kExec: env must be an object, got %T", field)
+			}
+			opts.Env = make(map[string]string, len(environment))
+			for name, value := range environment {
+				opts.Env[name] = fmt.Sprintf("%v", value)
+			}
+		default:
+			throwf(call.Otto, "kExec: unknown option %q, want dir, env or stdin", key)
+		}
+	}
+	return opts
+}
+
 // bindStat and bindListDir convert their results by hand, so scripts see plain objects
 // with lowercase keys rather than wrapped Go values.
 
@@ -187,15 +222,25 @@ func bindListDir(call otto.FunctionCall) otto.Value {
 func bindExec(cfg vmConfig) func(otto.FunctionCall) otto.Value {
 	return func(call otto.FunctionCall) otto.Value {
 		name := argString(call, 0, "kExec: command name")
+
+		// A trailing object is options rather than another argument. Strings are
+		// primitives in JavaScript, so this cannot swallow a real argument.
+		last := len(call.ArgumentList) - 1
+		opts := js.ExecOptions{Limit: cfg.maxOutput}
+		if last > 0 && call.Argument(last).IsObject() {
+			opts = execOptions(call, call.Argument(last), cfg.maxOutput)
+			last--
+		}
+
 		args := make([]string, 0, len(call.ArgumentList))
-		for i := 1; i < len(call.ArgumentList); i++ {
+		for i := 1; i <= last; i++ {
 			args = append(args, argString(call, i, fmt.Sprintf("kExec: argument %d", i)))
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.execTimeout)
 		defer cancel()
 
-		result, err := js.Exec(ctx, cfg.maxOutput, name, args...)
+		result, err := js.Exec(ctx, opts, name, args...)
 		if err != nil {
 			throwf(call.Otto, "%v", err)
 		}
