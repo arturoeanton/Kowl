@@ -685,3 +685,36 @@ func TestSuppressedRepeatsAreLoggedAtDebug(t *testing.T) {
 		t.Fatalf("debug kept %d of 5 repeats:\n%s", got, logs.String())
 	}
 }
+
+// The record of what a hook wrote expires, so watching a churn of short-lived files does
+// not grow the map without bound.
+func TestWriteRecordsExpire(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "observed.txt")
+	if err := os.WriteFile(file, []byte("start"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded := &calls{
+		written: []string{file},
+		hook:    func(op, name string) error { return os.WriteFile(name, []byte("by the hook"), 0o644) },
+	}
+	d := newDispatcher(recorded.run, NewLogger(&safeBuffer{}, LevelError, FormatText), 0, false)
+	defer d.Close()
+	d.settle = 50 * time.Millisecond
+
+	d.Dispatch("WRITE", file)
+	d.idle(t)
+	if len(d.wrote) != 1 {
+		t.Fatalf("the hook's write was not recorded: %v", d.wrote)
+	}
+
+	// Past the settle window the record no longer explains anything, so the next event
+	// runs and the stale entry is dropped.
+	time.Sleep(80 * time.Millisecond)
+	d.Dispatch("WRITE", file)
+	d.idle(t)
+
+	if got := recorded.count(); got != 2 {
+		t.Fatalf("ran %d hooks, want 2: an expired record still suppressed an event", got)
+	}
+}

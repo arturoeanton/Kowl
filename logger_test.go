@@ -230,3 +230,23 @@ func TestParseFormatRejectsUnknownNames(t *testing.T) {
 		t.Fatal("ParseFormat returned nil error for an unknown format")
 	}
 }
+
+// A Level or Format that came from somewhere other than Parse* still has to render as
+// something, since it goes straight into every log line.
+func TestLevelAndFormatStringifyUnknownValues(t *testing.T) {
+	if got := Level(99).String(); got != "Level(99)" {
+		t.Fatalf("Level(99).String() = %q, want %q", got, "Level(99)")
+	}
+	if got := Format(99).String(); got != "Format(99)" {
+		t.Fatalf("Format(99).String() = %q, want %q", got, "Format(99)")
+	}
+}
+
+func TestFormatStringifiesKnownValues(t *testing.T) {
+	if got := FormatText.String(); got != "text" {
+		t.Fatalf("FormatText.String() = %q, want %q", got, "text")
+	}
+	if got := FormatJSON.String(); got != "json" {
+		t.Fatalf("FormatJSON.String() = %q, want %q", got, "json")
+	}
+}

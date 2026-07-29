@@ -138,10 +138,14 @@ func CopyFile(source, destination string) error {
 	return nil
 }
 
+// renameFile is os.Rename, replaceable so the fallback below can be tested without two
+// filesystems to move between.
+var renameFile = os.Rename
+
 // MoveFile renames a file, falling back to a copy when the two paths are on different
 // filesystems and rename cannot cross the boundary.
 func MoveFile(source, destination string) error {
-	if err := os.Rename(source, destination); err == nil {
+	if err := renameFile(source, destination); err == nil {
 		return nil
 	}
 	if err := CopyFile(source, destination); err != nil {

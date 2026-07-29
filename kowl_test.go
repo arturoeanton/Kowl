@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // invoke runs the CLI with args and returns its exit code plus both streams.
@@ -259,5 +263,109 @@ func TestBrokenExcludePatternIsUsageError(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "unterminated") {
 		t.Fatalf("stderr %q does not name the bad pattern", stderr)
+	}
+}
+
+// --- SIGHUP handling ---------------------------------------------------------------
+
+// serveReloads is what SIGHUP reaches. The end-to-end test drives it through a real
+// process, which proves the signal arrives but covers none of the reporting below.
+func TestServeReloadsReportsWhatTheFreshCopyDefines(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out.txt")
+	key := "KOWL_TEST_SERVE_RELOAD"
+	t.Setenv(key, "first")
+
+	script := writeScript(t, `
+		const captured = kGetEnv("`+key+`")
+		function write(name, op) { kStringToFile(captured, `+quote(out)+`) }`)
+	runner := NewRunner(script)
+	if _, err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := &safeBuffer{}
+	signals := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveReloads(ctx, signals, runner, NewLogger(logs, LevelInfo, FormatText))
+	}()
+
+	t.Setenv(key, "second")
+	signals <- syscall.SIGHUP
+
+	waitFor(t, 2*time.Second, "the reload to be reported", func() bool {
+		return strings.Contains(logs.String(), "reloaded")
+	})
+	if !strings.Contains(logs.String(), "hooks: write") {
+		t.Fatalf("the reload did not say what the script defines:\n%s", logs.String())
+	}
+
+	cancel()
+	<-done
+
+	// The reload has to have taken effect, not just been announced.
+	if _, err := runner.Run("WRITE", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, out); got != "second" {
+		t.Fatalf("hook wrote %q after the reload, want %q", got, "second")
+	}
+}
+
+func TestServeReloadsReportsAScriptThatNoLongerParses(t *testing.T) {
+	script := writeScript(t, `function write(name, op) {}`)
+	runner := NewRunner(script)
+
+	logs := &safeBuffer{}
+	signals := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveReloads(ctx, signals, runner, NewLogger(logs, LevelInfo, FormatText))
+
+	rewriteScript(t, script, `function write( {`)
+	signals <- syscall.SIGHUP
+
+	waitFor(t, 2*time.Second, "the failure to be reported", func() bool {
+		return strings.Contains(logs.String(), "reload failed")
+	})
+}
+
+// Editing every hook out of a script leaves it running but useless, which is worth
+// saying out loud.
+func TestServeReloadsReportsAScriptWithNoHooksLeft(t *testing.T) {
+	script := writeScript(t, `function write(name, op) {}`)
+	runner := NewRunner(script)
+
+	logs := &safeBuffer{}
+	signals := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveReloads(ctx, signals, runner, NewLogger(logs, LevelInfo, FormatText))
+
+	rewriteScript(t, script, `function helper() { return 1 }`)
+	signals <- syscall.SIGHUP
+
+	waitFor(t, 2*time.Second, "the empty script to be reported", func() bool {
+		return strings.Contains(logs.String(), "none of the known hooks")
+	})
+}
+
+func TestServeReloadsStopsWithItsContext(t *testing.T) {
+	runner := NewRunner(writeScript(t, `function write(name, op) {}`))
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveReloads(ctx, make(chan os.Signal), runner, NewLogger(&safeBuffer{}, LevelError, FormatText))
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveReloads did not return after its context was cancelled")
 	}
 }

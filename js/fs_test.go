@@ -1,6 +1,7 @@
 package js
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +318,95 @@ func TestMoveFileReportsAMissingSource(t *testing.T) {
 	dir := t.TempDir()
 	if err := MoveFile(filepath.Join(dir, "missing"), filepath.Join(dir, "moved")); err == nil {
 		t.Fatal("MoveFile returned nil error for a missing source")
+	}
+}
+
+// rename cannot cross a filesystem boundary, which is ordinary in a container where the
+// source is on a tmpfs and the destination is not. MoveFile copies instead.
+func TestMoveFileFallsBackToCopyingWhenRenameFails(t *testing.T) {
+	original := renameFile
+	t.Cleanup(func() { renameFile = original })
+	renameFile = func(string, string) error { return errors.New("invalid cross-device link") }
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.txt")
+	destination := filepath.Join(dir, "moved.txt")
+	if err := os.WriteFile(source, []byte("payload"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MoveFile(source, destination); err != nil {
+		t.Fatalf("MoveFile: %v", err)
+	}
+
+	if Exists(source) {
+		t.Fatal("the source survived a move that fell back to copying")
+	}
+	got, err := ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "payload" {
+		t.Fatalf("moved file contains %q, want %q", got, "payload")
+	}
+	stat, err := Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.Mode != "0640" {
+		t.Fatalf("the fallback lost the permissions: mode %q, want %q", stat.Mode, "0640")
+	}
+}
+
+// When the copy cannot work either, the source must be left where it is rather than
+// removed after a half-finished move.
+func TestMoveFileKeepsTheSourceWhenTheFallbackFails(t *testing.T) {
+	original := renameFile
+	t.Cleanup(func() { renameFile = original })
+	renameFile = func(string, string) error { return errors.New("invalid cross-device link") }
+
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(source, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := MoveFile(source, filepath.Join(dir, "no-such-dir", "moved.txt"))
+	if err == nil {
+		t.Fatal("MoveFile returned nil for a destination it cannot write")
+	}
+	if !Exists(source) {
+		t.Fatal("the source was removed even though the move failed")
+	}
+}
+
+func TestAppendFileReportsAPathItCannotOpen(t *testing.T) {
+	// A directory can be opened but not written to.
+	if err := AppendFile("x", t.TempDir()); err == nil {
+		t.Fatal("AppendFile returned nil for a directory")
+	}
+}
+
+func TestMkdirAllReportsAParentThatIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "in-the-way")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MkdirAll(filepath.Join(blocker, "child")); err == nil {
+		t.Fatal("MkdirAll returned nil for a path whose parent is a file")
+	}
+}
+
+func TestCopyFileReportsADestinationItCannotWrite(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source.txt")
+	if err := os.WriteFile(source, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CopyFile(source, filepath.Join(dir, "no-such-dir", "copy.txt")); err == nil {
+		t.Fatal("CopyFile returned nil for a destination directory that does not exist")
 	}
 }
