@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/robertkrimen/otto"
+	"github.com/dop251/goja"
 )
 
 // ErrHookNotDefined is returned by Runner.Run when the script parses cleanly but does
@@ -21,12 +21,11 @@ var ErrHookNotDefined = errors.New("hook not defined")
 // reported at startup.
 var hookNames = []string{"exist", "create", "write", "remove", "rename", "chmod", "ticker", "not_found"}
 
-// hookTimeout is the value panicked with when a hook overruns its budget. It is
-// recovered in Run and never escapes.
-type hookTimeout struct{}
+// errHookTimeout is what the watchdog interrupts a VM with.
+var errHookTimeout = errors.New("kowl: time is up")
 
-// Runner owns the JavaScript side of Kowl: one otto VM, the script loaded into it, and
-// the lock that keeps hooks from running concurrently.
+// Runner owns the JavaScript side of Kowl: one JavaScript VM, the script loaded into it,
+// and the lock that keeps hooks from running concurrently.
 //
 // The VM is kept between events rather than rebuilt, so the script is parsed once
 // instead of once per event and globals survive from one hook to the next. It is
@@ -38,7 +37,7 @@ type Runner struct {
 	timeout    time.Duration
 
 	mu     sync.Mutex
-	vm     *otto.Otto
+	vm     *goja.Runtime
 	loaded fileStamp
 }
 
@@ -81,32 +80,32 @@ func (r *Runner) Run(op, name string) (written []string, err error) {
 	}
 
 	hook := strings.ToLower(op)
-	fn, err := vm.Get(hook)
-	if err != nil || !fn.IsFunction() {
+	fn, callable := goja.AssertFunction(vm.Get(hook))
+	if !callable {
 		return nil, fmt.Errorf("%s(): %w", hook, ErrHookNotDefined)
 	}
-
-	defer func() {
-		caught := recover()
-		if caught == nil {
-			return
-		}
-		if _, ok := caught.(hookTimeout); !ok {
-			panic(caught)
-		}
-		// The VM was interrupted part-way through a statement, so its state is no
-		// longer trustworthy. Drop it and load a fresh one for the next event.
-		r.discard()
-		err = fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
-	}()
 
 	stop := watchdog(vm, r.timeout)
 	defer stop()
 
-	if _, callErr := fn.Call(otto.NullValue(), name, op, newHookEvent(op, name)); callErr != nil {
+	event := vm.ToValue(newHookEvent(op, name))
+	if _, callErr := fn(goja.Undefined(), vm.ToValue(name), vm.ToValue(op), event); callErr != nil {
+		if interrupted(callErr) {
+			// The VM was stopped part-way through a statement, so its state is no
+			// longer trustworthy. Drop it and load a fresh one for the next event.
+			r.discard()
+			return nil, fmt.Errorf("%s() exceeded %s and was interrupted", hook, r.timeout)
+		}
 		return nil, fmt.Errorf("%s() failed: %w", hook, callErr)
 	}
 	return nil, nil
+}
+
+// interrupted reports whether a failure is the watchdog stopping the VM rather than the
+// script itself going wrong.
+func interrupted(err error) bool {
+	var stopped *goja.InterruptedError
+	return errors.As(err, &stopped)
 }
 
 // newHookEvent builds the third argument every hook receives. It used to be os.Args,
@@ -115,26 +114,35 @@ func (r *Runner) Run(op, name string) (written []string, err error) {
 //
 // The path may already be gone by then, on a REMOVE or a rename, so exists says whether
 // the rest of the fields mean anything.
-func newHookEvent(op, path string) map[string]interface{} {
-	event := map[string]interface{}{
-		"path":    path,
-		"op":      op,
-		"name":    filepath.Base(path),
-		"dir":     filepath.Dir(path),
-		"exists":  false,
-		"isDir":   false,
-		"size":    int64(0),
-		"modTime": "",
+func newHookEvent(op, path string) hookEvent {
+	event := hookEvent{
+		Path: path,
+		Op:   op,
+		Name: filepath.Base(path),
+		Dir:  filepath.Dir(path),
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return event
 	}
-	event["exists"] = true
-	event["isDir"] = info.IsDir()
-	event["size"] = info.Size()
-	event["modTime"] = info.ModTime().Format(time.RFC3339Nano)
+	event.Exists = true
+	event.IsDir = info.IsDir()
+	event.Size = info.Size()
+	event.ModTime = info.ModTime().Format(time.RFC3339Nano)
 	return event
+}
+
+// hookEvent is the third argument every hook receives. Field names reach JavaScript in
+// lower camel case, so this reads as {path, op, name, dir, exists, isDir, size, modTime}.
+type hookEvent struct {
+	Path    string
+	Op      string
+	Name    string
+	Dir     string
+	Exists  bool
+	IsDir   bool
+	Size    int64
+	ModTime string
 }
 
 // Reload drops the loaded script so the next event reads it again, and reports what the
@@ -160,7 +168,7 @@ func (r *Runner) DefinedHooks() ([]string, error) {
 	}
 	var defined []string
 	for _, hook := range hookNames {
-		if fn, err := vm.Get(hook); err == nil && fn.IsFunction() {
+		if _, callable := goja.AssertFunction(vm.Get(hook)); callable {
 			defined = append(defined, hook)
 		}
 	}
@@ -169,7 +177,7 @@ func (r *Runner) DefinedHooks() ([]string, error) {
 
 // ensureLoaded returns the VM holding the current version of the script, reloading it
 // if the file changed since it was last read. The caller must hold r.mu.
-func (r *Runner) ensureLoaded() (*otto.Otto, error) {
+func (r *Runner) ensureLoaded() (*goja.Runtime, error) {
 	info, err := os.Stat(r.scriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading script: %w", err)
@@ -196,43 +204,26 @@ func (r *Runner) ensureLoaded() (*otto.Otto, error) {
 // evaluate runs the script's top level under the same watchdog a hook gets. Statements
 // outside a function are code too: a loop among them used to hang Kowl with nothing
 // reported, at startup before any log line, and on reload while holding r.mu.
-func (r *Runner) evaluate(vm *otto.Otto, code string) (err error) {
-	defer func() {
-		caught := recover()
-		if caught == nil {
-			return
-		}
-		if _, ok := caught.(hookTimeout); !ok {
-			panic(caught)
-		}
-		err = fmt.Errorf("loading %s: top level exceeded %s and was interrupted", r.scriptPath, r.timeout)
-	}()
-
+func (r *Runner) evaluate(vm *goja.Runtime, code string) error {
 	stop := watchdog(vm, r.timeout)
 	defer stop()
 
-	if _, err := vm.Run(code); err != nil {
+	if _, err := vm.RunString(code); err != nil {
+		if interrupted(err) {
+			return fmt.Errorf("loading %s: top level exceeded %s and was interrupted", r.scriptPath, r.timeout)
+		}
 		return fmt.Errorf("loading %s: %w", r.scriptPath, err)
 	}
 	return nil
 }
 
-// watchdog arms vm.Interrupt so that work outlasting timeout is stopped. The returned
-// function disarms it and must be called before the VM is used again.
-func watchdog(vm *otto.Otto, timeout time.Duration) func() {
-	interrupt := make(chan func(), 1)
-	vm.Interrupt = interrupt
-	timer := time.AfterFunc(timeout, func() {
-		// Buffered and non-blocking, so the timer goroutine cannot outlive the call it
-		// was watching.
-		select {
-		case interrupt <- func() { panic(hookTimeout{}) }:
-		default:
-		}
-	})
+// watchdog stops the VM if it is still running after timeout. The returned function
+// disarms it and must be called before the VM is used again.
+func watchdog(vm *goja.Runtime, timeout time.Duration) func() {
+	timer := time.AfterFunc(timeout, func() { vm.Interrupt(errHookTimeout) })
 	return func() {
 		timer.Stop()
-		vm.Interrupt = nil
+		vm.ClearInterrupt()
 	}
 }
 

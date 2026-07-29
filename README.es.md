@@ -4,8 +4,11 @@ Observá archivos, ejecutá JavaScript cuando cambian.
 
 Los eventos del sistema de archivos vienen de
 [fsnotify](https://github.com/fsnotify/fsnotify); los scripts corren sobre
-[otto](https://github.com/robertkrimen/otto), un intérprete ES5 embebido. No hay Node.js,
+[goja](https://github.com/dop251/goja), un intérprete ES2015+ embebido. No hay Node.js,
 ni npm, ni `require` — un binario estático y un archivo `.js`.
+
+Los scripts son JavaScript moderno: `let` y `const`, funciones flecha, template literals,
+destructuring, spread, clases, `Map` y `Set`.
 
 *[Read this in English](README.md)*
 
@@ -32,7 +35,7 @@ Escribí sólo los hooks que te interesan:
 ```js
 // watch.js
 function write(name, op, event) {
-    console.log("cambió:", event.name, event.size + " bytes")
+    console.log(`cambió: ${event.name} ${event.size} bytes`)
 }
 ```
 
@@ -136,10 +139,10 @@ Los hooks nunca corren concurrentemente, así que un script puede guardar estado
 variables globales comunes:
 
 ```js
-var escrituras = 0
+let escrituras = 0
 function write(name, op, event) {
-    escrituras = escrituras + 1
-    console.log(event.name, "escrito", escrituras, "veces")
+    escrituras += 1
+    console.log(`${event.name} escrito ${escrituras} veces`)
 }
 ```
 
@@ -301,25 +304,28 @@ Vía [gentleman](https://github.com/h2non/gentleman), expuesto como `kCli`:
 
 ```js
 kCli.URL("http://httpbin.org")
-var req = kCli.Request()
+const req = kCli.Request()
 req.Path("/headers")
 req.SetHeader("Client", "kowl")
-var res = req.Send()
-console.log("Body:", res[0].String())
+const res = req.Send()
+console.log("Body:", res.String())
 ```
 
 ```js
 kCli.URL("http://httpbin.org/post")
-var req = kCli.Request()
+const req = kCli.Request()
 req.Method("POST")
 req.Use(kBodyJSON({"foo": "bar"}))
-var res = req.Send()
-console.log("Status:", res[0].StatusCode)
+console.log("Status:", req.Send().statusCode)
 ```
 
 `kBodyJSON`, `kBodyXML` y `kBodyString` arman cuerpos de request. Los requests expiran a
-los `--http-timeout`. Estos son objetos de Go expuestos directamente, así que `Send()`
-devuelve el par `(response, error)` de Go como un array de dos elementos.
+los `--http-timeout`, y `Send()` lanza excepción cuando uno falla.
+
+Estos son objetos de Go expuestos directamente. Sus **campos** llegan a JavaScript en
+lower camel case — `res.statusCode`, no `res.StatusCode` — mientras que sus **métodos**
+conservan sus nombres de Go, así que es `res.String()` y `kCli.URL()`. La misma regla
+produce los nombres de campo de `event`, `kStat` y `kExec`.
 
 ### Logging
 
@@ -358,9 +364,12 @@ console.log(kGetEnv("VAR"), kHostname(), kNow())
 [underscore](https://underscorejs.org) está disponible como `_`:
 
 ```js
-var stooges = [{name: 'moe', age: 40}, {name: 'larry', age: 50}]
+const stooges = [{name: 'moe', age: 40}, {name: 'larry', age: 50}]
 console.log(_.pluck(stooges, 'name'))
 ```
+
+Está vendorizado en `vendorjs/` y embebido en el binario. Casi todo lo que ofrece ya está
+en el lenguaje, así que un script nuevo rara vez lo necesita.
 
 ## Salida y operación
 
@@ -444,6 +453,9 @@ go test -v -run TestEncrypt ./js
 
 * fsnotify usa inotify en Linux, kqueue en macOS y los BSD, y ReadDirectoryChangesW en
   Windows. Los tests asumen una shell Unix.
+* El motor de JavaScript es goja, que es ES2015+ pero no es un navegador ni Node: no hay
+  DOM, ni `require`, ni `fetch`, ni event loop. Usá `kCli` para HTTP y `kExec` para el
+  resto.
 * Los watchers siguen inodos, no paths. Kowl reconstruye uno cuando el archivo que estaba
   observando se borra y se vuelve a crear, cosa que nota dentro del segundo.
 * Si la cola del propio kernel desborda, los eventos se pierden antes de que Kowl los vea.

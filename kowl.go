@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
-	"github.com/robertkrimen/otto/underscore"
 )
 
 // Process exit codes.
@@ -44,13 +43,6 @@ type options struct {
 	LogLevel       string        `long:"log-level" default:"info" description:"debug, info, warn or error"`
 	LogFormat      string        `long:"log-format" default:"text" description:"text or json"`
 	Version        bool          `short:"V" long:"version" description:"print the version and exit"`
-}
-
-func init() {
-	// otto's registry writes Entry.active without a lock, so enabling underscore from a
-	// running VM races against every other VM being constructed. Enable it once, before
-	// any goroutine exists. Importing the package already registers the source.
-	underscore.Enable()
 }
 
 func main() {
