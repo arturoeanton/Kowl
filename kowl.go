@@ -30,7 +30,7 @@ const supervisorInterval = time.Second
 type options struct {
 	Filename       []string      `short:"f" required:"true" long:"filename" description:"file, directory or glob to observe, repeatable"`
 	Script         string        `short:"j" required:"true" long:"javascript" description:"JavaScript file holding the hooks"`
-	Millisecond    int           `short:"m" default:"1000" long:"millisecond" description:"poll interval in milliseconds, 0 disables polling"`
+	Interval       time.Duration `short:"m" default:"1s" long:"interval" description:"poll interval, 0 disables polling"`
 	FlagNotWatcher bool          `short:"w" long:"flagNotWatcher" description:"disable the filesystem watcher, leaving only polling"`
 	Recursive      bool          `short:"r" long:"recursive" description:"watch every directory below a matched directory"`
 	MaxWatches     int           `long:"max-watches" default:"4096" description:"how many paths may be watched at once"`
@@ -83,11 +83,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if opts.Millisecond < 0 {
+	if opts.Interval < 0 {
 		fmt.Fprintln(stderr, "-m must be zero or positive")
 		return exitUsage
 	}
-	if opts.FlagNotWatcher && opts.Millisecond == 0 {
+	if opts.FlagNotWatcher && opts.Interval == 0 {
 		fmt.Fprintln(stderr, "nothing to do: -w disables the watcher and -m 0 disables polling")
 		return exitUsage
 	}
@@ -160,12 +160,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			}, events.Dispatch, logger)
 		}()
 	}
-	if opts.Millisecond > 0 {
-		interval := time.Duration(opts.Millisecond) * time.Millisecond
+	if opts.Interval > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			Poll(ctx, opts.Filename, interval, events.Dispatch, logger)
+			Poll(ctx, opts.Filename, opts.Interval, events.Dispatch, logger)
 		}()
 	}
 

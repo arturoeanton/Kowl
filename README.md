@@ -23,6 +23,7 @@ Dependencies are pinned in `go.mod`; `go build` fetches them. Without a stamped 
 ./kowl -f /tmp/foo -j example.js            # watcher plus one poll per second
 ./kowl -f /tmp/foo -j example.js -w         # polling only
 ./kowl -f /tmp/foo -j example.js -m 0       # watcher only
+./kowl -f /tmp/foo -j example.js -m 5s      # poll every five seconds
 ./kowl -f 'logs/*.log' -f /etc/hosts -j example.js
 ./kowl -f ./config -j example.js            # a directory reports events for its files
 ./kowl -f ./src -r -j example.js            # and the whole tree below it
@@ -56,8 +57,7 @@ Usage:
 Application Options:
   -f, --filename=       file, directory or glob to observe, repeatable
   -j, --javascript=     JavaScript file holding the hooks
-  -m, --millisecond=    poll interval in milliseconds, 0 disables polling
-                        (default: 1000)
+  -m, --interval=       poll interval, 0 disables polling (default: 1s)
   -w, --flagNotWatcher  disable the filesystem watcher, leaving only polling
   -r, --recursive       watch every directory below a matched directory
       --max-watches=    how many paths may be watched at once (default: 4096)
@@ -79,6 +79,9 @@ Help Options:
 ```
 
 `-w` together with `-m 0` leaves nothing observing anything, and is rejected.
+
+Every timing flag takes a duration: `-m 5s`, `--debounce 50ms`, `--hook-timeout 2m`. A
+bare number is rejected rather than assumed to mean some particular unit.
 
 ## Hooks
 

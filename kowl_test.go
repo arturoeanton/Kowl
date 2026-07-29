@@ -22,7 +22,7 @@ func TestHelpExitsSuccessfully(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("-h exit code = %d, want %d (stderr: %s)", code, exitOK, stderr)
 	}
-	for _, flag := range []string{"--filename", "--javascript", "--millisecond", "--flagNotWatcher"} {
+	for _, flag := range []string{"--filename", "--javascript", "--interval", "--flagNotWatcher"} {
 		if !strings.Contains(stdout, flag) {
 			t.Fatalf("help output is missing %s:\n%s", flag, stdout)
 		}
@@ -44,7 +44,7 @@ func TestWatcherAndPollingBothDisabledIsUsageError(t *testing.T) {
 }
 
 func TestNegativeIntervalIsUsageError(t *testing.T) {
-	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "-m", "-5")
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "-m", "-5s")
 
 	if code != exitUsage {
 		t.Fatalf("exit code = %d, want %d", code, exitUsage)
@@ -175,6 +175,33 @@ func TestFilenameFlagIsRepeatable(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "reading script") {
 		t.Fatalf("stderr %q suggests the -f values were not accepted", stderr)
+	}
+}
+
+// -m is a duration like every other timing flag, so a bare number is rejected rather
+// than quietly meaning something else.
+func TestIntervalRequiresAUnit(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "-m", "1000")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "1000") {
+		t.Fatalf("stderr %q does not name the rejected value", stderr)
+	}
+}
+
+func TestIntervalAcceptsDurations(t *testing.T) {
+	// Reaching the script check means the value parsed.
+	missing := filepath.Join(t.TempDir(), "does-not-exist.js")
+
+	for _, value := range []string{"500ms", "2s", "1m", "0"} {
+		t.Run(value, func(t *testing.T) {
+			code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", missing, "-m", value)
+			if code != exitError {
+				t.Fatalf("-m %s exit code = %d, want %d (stderr: %s)", value, code, exitError, stderr)
+			}
+		})
 	}
 }
 
