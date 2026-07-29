@@ -197,3 +197,37 @@ func TestExampleScriptParsesAndDefinesEveryHook(t *testing.T) {
 		t.Fatalf("example.js defines %q, want %q", got, want)
 	}
 }
+
+// A helper with no test is a helper nobody would notice losing. This exists because a
+// careless edit during the goja migration deleted twenty tests at once, and the only
+// signal was a coverage number nobody was watching.
+func TestEveryHelperIsExercisedByATest(t *testing.T) {
+	sources, err := filepath.Glob("*_test.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no test files found: %v", err)
+	}
+	var tests strings.Builder
+	for _, source := range sources {
+		if source == "docs_test.go" {
+			// This file names every helper by construction, so it would vouch for all
+			// of them and prove nothing.
+			continue
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tests.Write(data)
+	}
+
+	corpus := tests.String()
+	helpers := bindingNames()
+	if len(helpers) < 20 {
+		t.Fatalf("found only %d helpers, the listing is probably wrong", len(helpers))
+	}
+	for _, helper := range helpers {
+		if !strings.Contains(corpus, helper) {
+			t.Errorf("no test mentions %s", helper)
+		}
+	}
+}
