@@ -530,6 +530,9 @@ script, `2` ante un error de uso.
 Usage:
   kowl [OPTIONS]
 
+Usage:
+  kowl [OPTIONS]
+
 Application Options:
   -f, --filename=       file, directory or glob to observe, repeatable
   -j, --javascript=     JavaScript file holding the hooks
@@ -551,6 +554,8 @@ Application Options:
                         (default: 1048576)
       --log-level=      debug, info, warn or error (default: info)
       --log-format=     text or json (default: text)
+      --check           load the script, report what it defines and exit
+      --once            run the hooks against what is there now and exit
   -V, --version         print the version and exit
 
 Help Options:
@@ -560,6 +565,18 @@ Help Options:
 Todos los flags de tiempo toman una duración: `-m 5s`, `--debounce 50ms`,
 `--hook-timeout 2m`. Un número pelado se rechaza en vez de asumir alguna unidad. Kowl no
 toma argumentos posicionales; cada path necesita su propio `-f`.
+
+Dos flags son para probar un script, no para correrlo:
+
+```
+kowl -j watch.js --check                  # lo carga, dice qué define y sale
+kowl -f 'logs/*.log' -j watch.js --once   # corre los hooks sobre lo que hay ahora
+```
+
+`--check` no necesita `-f`, sale con `1` cuando el script no carga o no define hooks, y es
+lo bastante chico para un hook de pre-commit. `--once` hace una sola pasada, así que los
+hooks que alcanza son `ticker` por cada path que coincide y `not_found` por cada patrón
+que no coincide con nada; respeta `-x` y sale cuando terminó el último hook.
 
 ## Compilar y testear
 

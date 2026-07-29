@@ -524,6 +524,9 @@ retrying either way; it just stops narrating.
 Usage:
   kowl [OPTIONS]
 
+Usage:
+  kowl [OPTIONS]
+
 Application Options:
   -f, --filename=       file, directory or glob to observe, repeatable
   -j, --javascript=     JavaScript file holding the hooks
@@ -545,6 +548,8 @@ Application Options:
                         (default: 1048576)
       --log-level=      debug, info, warn or error (default: info)
       --log-format=     text or json (default: text)
+      --check           load the script, report what it defines and exit
+      --once            run the hooks against what is there now and exit
   -V, --version         print the version and exit
 
 Help Options:
@@ -554,6 +559,18 @@ Help Options:
 Every timing flag takes a duration: `-m 5s`, `--debounce 50ms`, `--hook-timeout 2m`. A
 bare number is rejected rather than assumed to mean some particular unit. Kowl takes no
 positional arguments; every path needs its own `-f`.
+
+Two flags are for trying a script rather than running one:
+
+```
+kowl -j watch.js --check                  # loads it, says what it defines, exits
+kowl -f 'logs/*.log' -j watch.js --once   # runs the hooks against what is there now
+```
+
+`--check` needs no `-f`, exits `1` when the script cannot be loaded or defines no hooks,
+and is small enough for a pre-commit hook. `--once` does a single pass, so the hooks it
+reaches are `ticker` for each matching path and `not_found` for each pattern matching
+nothing; it honours `-x` and exits when the last hook has finished.
 
 ## Building and testing
 

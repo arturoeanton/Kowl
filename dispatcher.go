@@ -171,6 +171,14 @@ func (d *dispatcher) Dispatch(op, name string) {
 	entry.timer = time.AfterFunc(d.debounce, func() { d.fire(key, op, name) })
 }
 
+// Drain waits until everything already queued has been through a hook. It is for --once,
+// which has a finite amount of work and needs to know when it is done.
+func (d *dispatcher) Drain() {
+	for d.handled.Load() < d.submitted.Load() {
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // Close stops accepting events, cancels anything still waiting on a debounce timer, and
 // waits for the hook already running to finish. Whatever was still queued is abandoned.
 func (d *dispatcher) Close() {

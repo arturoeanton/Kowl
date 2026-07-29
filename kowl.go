@@ -27,8 +27,8 @@ const (
 const supervisorInterval = time.Second
 
 type options struct {
-	Filename       []string      `short:"f" required:"true" long:"filename" description:"file, directory or glob to observe, repeatable"`
-	Script         string        `short:"j" required:"true" long:"javascript" description:"JavaScript file holding the hooks"`
+	Filename       []string      `short:"f" long:"filename" description:"file, directory or glob to observe, repeatable"`
+	Script         string        `short:"j" long:"javascript" description:"JavaScript file holding the hooks"`
 	Interval       time.Duration `short:"m" default:"1s" long:"interval" description:"poll interval, 0 disables polling"`
 	FlagNotWatcher bool          `short:"w" long:"flagNotWatcher" description:"disable the filesystem watcher, leaving only polling"`
 	Recursive      bool          `short:"r" long:"recursive" description:"watch every directory below a matched directory"`
@@ -42,6 +42,8 @@ type options struct {
 	MaxOutput      int           `long:"max-output" default:"1048576" description:"bytes of stdout and of stderr kept per kExec command"`
 	LogLevel       string        `long:"log-level" default:"info" description:"debug, info, warn or error"`
 	LogFormat      string        `long:"log-format" default:"text" description:"text or json"`
+	Check          bool          `long:"check" description:"load the script, report what it defines and exit"`
+	Once           bool          `long:"once" description:"run the hooks against what is there now and exit"`
 	Version        bool          `short:"V" long:"version" description:"print the version and exit"`
 }
 
@@ -99,6 +101,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// path that was meant to follow -f. Accepting it silently watches the wrong thing.
 	if len(extra) > 0 {
 		fmt.Fprintf(stderr, "unexpected argument %q: every path needs its own -f\n", extra[0])
+		return exitUsage
+	}
+
+	// -j alone is enough to check a script; watching also needs -f.
+	if opts.Script == "" {
+		fmt.Fprintln(stderr, "the required flag `-j, --javascript' was not specified")
+		return exitUsage
+	}
+	if !opts.Check && len(opts.Filename) == 0 {
+		fmt.Fprintln(stderr, "the required flag `-f, --filename' was not specified")
 		return exitUsage
 	}
 
@@ -180,10 +192,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
+	// --check has done everything it was asked to by getting this far.
+	if opts.Check {
+		fmt.Fprintf(stdout, "%s defines %s\n", opts.Script, strings.Join(hooks, ", "))
+		return exitOK
+	}
+
 	logger.Infof("watching %s with %s (hooks: %s)",
 		strings.Join(opts.Filename, ", "), opts.Script, strings.Join(hooks, ", "))
 
 	events := newDispatcher(runner.Run, logger, opts.Debounce, opts.SelfTrigger)
+
+	// --once looks at what is there now, runs the hooks for it and stops. There is no
+	// watcher, so the operations are the ones polling produces.
+	if opts.Once {
+		for _, pattern := range opts.Filename {
+			matches := match(pattern)
+			if len(matches) == 0 {
+				events.Dispatch("NOT_FOUND", pattern)
+				continue
+			}
+			for _, path := range matches {
+				if !excluded(opts.Exclude, path) {
+					events.Dispatch("TICKER", path)
+				}
+			}
+		}
+		events.Drain()
+		events.Close()
+		return exitOK
+	}
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()

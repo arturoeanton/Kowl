@@ -387,3 +387,154 @@ func TestEmptyPatternIsUsageError(t *testing.T) {
 		})
 	}
 }
+
+// --- --check and --once ------------------------------------------------------------
+
+// Checking a script should not require telling Kowl what to watch.
+func TestCheckValidatesAScriptWithoutWatchingAnything(t *testing.T) {
+	script := writeScript(t, `
+		function write(name, op) {}
+		function ticker(name, op) {}`)
+
+	code, stdout, stderr := invoke(t, "-j", script, "--check")
+
+	if code != exitOK {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitOK, stderr)
+	}
+	if !strings.Contains(stdout, "write, ticker") {
+		t.Fatalf("stdout %q does not report what the script defines", stdout)
+	}
+}
+
+func TestCheckRejectsAScriptThatDoesNotParse(t *testing.T) {
+	script := writeScript(t, `function write( {`)
+
+	code, _, stderr := invoke(t, "-j", script, "--check")
+
+	if code != exitError {
+		t.Fatalf("exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, script) {
+		t.Fatalf("stderr %q does not name the script", stderr)
+	}
+}
+
+func TestCheckRejectsAScriptWithNoHooks(t *testing.T) {
+	script := writeScript(t, `function helper() { return 1 }`)
+
+	code, _, stderr := invoke(t, "-j", script, "--check")
+
+	if code != exitError {
+		t.Fatalf("exit code = %d, want %d", code, exitError)
+	}
+	if !strings.Contains(stderr, "none of the known hooks") {
+		t.Fatalf("stderr %q does not explain the problem", stderr)
+	}
+}
+
+// -j is needed even to check, and -f only when actually watching.
+func TestMissingScriptIsUsageErrorEvenForCheck(t *testing.T) {
+	code, _, stderr := invoke(t, "--check")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "javascript") {
+		t.Fatalf("stderr %q does not name the missing flag", stderr)
+	}
+}
+
+// --once runs against what is there now and stops, rather than leaving a daemon behind.
+func TestOnceRunsTheHooksAndExits(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "journal.txt")
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := writeScript(t, `
+		function ticker(name, op, event) { kAppendFile(event.name + "\n", `+quote(journal)+`) }`)
+
+	done := make(chan int, 1)
+	go func() {
+		var out, errOut safeBuffer
+		done <- run([]string{"-f", filepath.Join(dir, "*.txt"), "-j", script, "--once"}, &out, &errOut)
+	}()
+
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want %d", code, exitOK)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("--once did not exit")
+	}
+
+	got := readFile(t, journal)
+	for _, want := range []string{"a.txt", "b.txt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the journal %q is missing %s", got, want)
+		}
+	}
+}
+
+// A pattern matching nothing still reaches not_found, so a one-shot run can act on an
+// absence too.
+func TestOnceReportsAPatternThatMatchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "journal.txt")
+	script := writeScript(t, `
+		function not_found(name, op, event) { kAppendFile("missing:" + event.path + "\n", `+quote(journal)+`) }`)
+
+	done := make(chan int, 1)
+	go func() {
+		var out, errOut safeBuffer
+		done <- run([]string{"-f", filepath.Join(dir, "nowhere.txt"), "-j", script, "--once"}, &out, &errOut)
+	}()
+
+	select {
+	case code := <-done:
+		if code != exitOK {
+			t.Fatalf("exit code = %d, want %d", code, exitOK)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("--once did not exit")
+	}
+
+	if got := readFile(t, journal); !strings.Contains(got, "nowhere.txt") {
+		t.Fatalf("the journal %q does not mention the missing path", got)
+	}
+}
+
+// --once honours -x, so a one-shot run covers the same set a watching run would.
+func TestOnceHonoursExclusions(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "journal.txt")
+	for _, name := range []string{"keep.txt", "skip.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := writeScript(t, `
+		function ticker(name, op, event) { kAppendFile(event.name + "\n", `+quote(journal)+`) }`)
+
+	done := make(chan int, 1)
+	go func() {
+		var out, errOut safeBuffer
+		done <- run([]string{"-f", filepath.Join(dir, "*.txt"), "-j", script, "-x", "skip.txt", "--once"}, &out, &errOut)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("--once did not exit")
+	}
+
+	got := readFile(t, journal)
+	if !strings.Contains(got, "keep.txt") {
+		t.Fatalf("the journal %q is missing the file that should have run", got)
+	}
+	if strings.Contains(got, "skip.txt") {
+		t.Fatalf("the journal %q includes an excluded file", got)
+	}
+}
