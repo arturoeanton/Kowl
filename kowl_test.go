@@ -237,3 +237,27 @@ func TestUnknownLogFormatIsUsageError(t *testing.T) {
 		t.Fatalf("stderr %q does not name the rejected format", stderr)
 	}
 }
+
+// Kowl takes no positional arguments. One used to be accepted silently, so
+// `kowl -f a b -j s.js` watched only a and never said b had been dropped.
+func TestPositionalArgumentIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/one", "/tmp/two", "-j", "example.js")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "/tmp/two") {
+		t.Fatalf("stderr %q does not name the argument that was dropped", stderr)
+	}
+	if !strings.Contains(stderr, "-f") {
+		t.Fatalf("stderr %q does not say what to do instead", stderr)
+	}
+}
+
+func TestPositionalArgumentAfterASeparatorIsAlsoRejected(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/one", "-j", "example.js", "--", "leftover")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitUsage, stderr)
+	}
+}

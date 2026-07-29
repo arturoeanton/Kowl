@@ -69,13 +69,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	var opts options
 	parser := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash)
-	if _, err := parser.ParseArgs(args); err != nil {
+	extra, err := parser.ParseArgs(args)
+	if err != nil {
 		var flagsErr *flags.Error
 		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrHelp {
 			fmt.Fprintln(stdout, err)
 			return exitOK
 		}
 		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
+	// Kowl takes no positional arguments, so one is a mistake: a misplaced value, or a
+	// path that was meant to follow -f. Accepting it silently watches the wrong thing.
+	if len(extra) > 0 {
+		fmt.Fprintf(stderr, "unexpected argument %q: every path needs its own -f\n", extra[0])
 		return exitUsage
 	}
 
