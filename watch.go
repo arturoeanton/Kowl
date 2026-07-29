@@ -3,20 +3,54 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
-// Dispatch runs the hook for an operation on a file. It never fails: a Dispatch is
+// Dispatch runs the hook for an operation on a path. It never fails: a Dispatch is
 // responsible for reporting its own errors so that one bad event cannot stop watching.
 type Dispatch func(op, name string)
 
-// Poll fires TICKER while the observed file exists and NOT_FOUND while it does not.
-// It returns when ctx is cancelled.
-func Poll(ctx context.Context, filename string, interval time.Duration, dispatch Dispatch, logger *log.Logger) {
+// ValidatePatterns rejects patterns that filepath.Match cannot parse, so a typo is
+// reported at startup rather than silently matching nothing forever.
+func ValidatePatterns(patterns []string) error {
+	for _, pattern := range patterns {
+		if _, err := filepath.Match(pattern, ""); err != nil {
+			return fmt.Errorf("invalid pattern %q: %w", pattern, err)
+		}
+	}
+	return nil
+}
+
+// resolve returns the existing paths matched by the patterns, deduplicated and sorted.
+// A pattern with no wildcards resolves to itself when it exists, so plain filenames and
+// globs go through the same path.
+func resolve(patterns []string) []string {
+	seen := make(map[string]bool)
+	var paths []string
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			// Rejected by ValidatePatterns at startup; nothing useful to do per tick.
+			continue
+		}
+		for _, match := range matches {
+			if !seen[match] {
+				seen[match] = true
+				paths = append(paths, match)
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// Poll fires TICKER for every path a pattern currently matches, and NOT_FOUND for every
+// pattern that matches nothing. It returns when ctx is cancelled.
+func Poll(ctx context.Context, patterns []string, interval time.Duration, dispatch Dispatch, logger *Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -25,82 +59,108 @@ func Poll(ctx context.Context, filename string, interval time.Duration, dispatch
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := os.Stat(filename); err != nil {
-				if !os.IsNotExist(err) {
-					logger.Printf("stat %s: %v", filename, err)
+			for _, pattern := range patterns {
+				matches, err := filepath.Glob(pattern)
+				if err != nil || len(matches) == 0 {
+					dispatch("NOT_FOUND", pattern)
+					continue
 				}
-				dispatch("NOT_FOUND", filename)
-			} else {
-				dispatch("TICKER", filename)
+				for _, match := range matches {
+					dispatch("TICKER", match)
+				}
 			}
 		}
 	}
 }
 
-// Supervise keeps exactly one fsnotify observer alive for filename. fsnotify watches
-// inodes rather than paths, so the observer is torn down when the file disappears and a
-// fresh one is started when it comes back. Tearing it down is what releases the
-// watcher's file descriptor and goroutine; letting it linger leaked one of each per
-// delete/recreate cycle until the process ran out of watches.
+// observerHandle lets the supervisor stop one observer and wait for it to release its
+// watcher.
+type observerHandle struct {
+	cancel context.CancelFunc
+	done   <-chan struct{}
+}
+
+func (h *observerHandle) stop() {
+	h.cancel()
+	<-h.done
+}
+
+// Supervise keeps exactly one fsnotify observer alive per path the patterns match.
+//
+// fsnotify watches inodes rather than paths, so an observer is torn down when its path
+// disappears and a fresh one is started when it comes back. Tearing it down is what
+// releases the watcher's file descriptor and goroutine; letting it linger leaked one of
+// each per delete/recreate cycle until the process ran out of watches.
+//
+// A path may be a directory, in which case fsnotify reports events for its children.
+// That is the reliable way to catch editors that save by writing a new file and
+// renaming it over the old one.
 //
 // EXIST is dispatched synchronously each time an observer is established, so it is
 // always ordered before any event that observer produces.
-func Supervise(ctx context.Context, filename string, interval time.Duration, dispatch Dispatch, logger *log.Logger) {
+func Supervise(ctx context.Context, patterns []string, interval time.Duration, dispatch Dispatch, logger *Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	var (
-		cancel context.CancelFunc
-		done   <-chan struct{}
-	)
-	stop := func() {
-		if cancel == nil {
-			return
+	observers := make(map[string]*observerHandle)
+	defer func() {
+		for path, handle := range observers {
+			handle.stop()
+			delete(observers, path)
 		}
-		cancel()
-		<-done
-		cancel, done = nil, nil
-	}
-	defer stop()
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_, err := os.Stat(filename)
-			switch {
-			case err != nil:
-				stop()
-			case cancel == nil:
-				observerCtx, observerCancel := context.WithCancel(ctx)
-				observerDone, err := observe(observerCtx, filename, dispatch, logger)
-				if err != nil {
-					// The file can vanish between the Stat above and the Add below.
-					// Leave cancel nil so the next tick retries instead of leaving a
-					// live observer that watches nothing.
-					observerCancel()
-					logger.Printf("%v (retrying)", err)
+			present := resolve(patterns)
+			stillThere := make(map[string]bool, len(present))
+			for _, path := range present {
+				stillThere[path] = true
+			}
+
+			for path, handle := range observers {
+				if !stillThere[path] {
+					handle.stop()
+					delete(observers, path)
+					logger.Debugf("stopped watching %s", path)
+				}
+			}
+
+			for _, path := range present {
+				if _, watching := observers[path]; watching {
 					continue
 				}
-				cancel, done = observerCancel, observerDone
-				dispatch("EXIST", filename)
+				observerCtx, observerCancel := context.WithCancel(ctx)
+				done, err := observe(observerCtx, path, dispatch, logger)
+				if err != nil {
+					// The path can vanish between resolve and Add. Leave it unwatched
+					// so the next tick retries, instead of keeping a live observer
+					// that watches nothing.
+					observerCancel()
+					logger.Errorf("%v (retrying)", err)
+					continue
+				}
+				observers[path] = &observerHandle{cancel: observerCancel, done: done}
+				logger.Debugf("watching %s", path)
+				dispatch("EXIST", path)
 			}
 		}
 	}
 }
 
-// observe starts watching filename and translates fsnotify events into hook
-// dispatches. The returned channel is closed once the observer has stopped and its
-// watcher has been closed.
-func observe(ctx context.Context, filename string, dispatch Dispatch, logger *log.Logger) (<-chan struct{}, error) {
+// observe starts watching path and translates fsnotify events into hook dispatches. The
+// returned channel is closed once the observer has stopped and its watcher is closed.
+func observe(ctx context.Context, path string, dispatch Dispatch, logger *Logger) (<-chan struct{}, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return nil, fmt.Errorf("creating watcher for %s: %w", filename, err)
+		return nil, fmt.Errorf("creating watcher for %s: %w", path, err)
 	}
-	if err := watcher.Add(filename); err != nil {
+	if err := watcher.Add(path); err != nil {
 		watcher.Close()
-		return nil, fmt.Errorf("watching %s: %w", filename, err)
+		return nil, fmt.Errorf("watching %s: %w", path, err)
 	}
 
 	done := make(chan struct{})
@@ -124,7 +184,7 @@ func observe(ctx context.Context, filename string, dispatch Dispatch, logger *lo
 					return
 				}
 				// A watcher error is not fatal: report it and keep observing.
-				logger.Printf("watcher error on %s: %v", filename, err)
+				logger.Errorf("watcher error on %s: %v", path, err)
 			}
 		}
 	}()

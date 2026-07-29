@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,8 +33,15 @@ func (s *safeBuffer) String() string {
 	return s.buf.String()
 }
 
-func (s *safeBuffer) logger() *log.Logger {
-	return log.New(s, "", 0)
+// logger returns a Logger that keeps everything, so tests can assert on what was
+// reported as well as on what was dispatched.
+func (s *safeBuffer) logger() *Logger {
+	return NewLogger(s, LevelDebug)
+}
+
+// errorLogger keeps only failures, for tests asserting that nothing went wrong.
+func (s *safeBuffer) errorLogger() *Logger {
+	return NewLogger(s, LevelError)
 }
 
 // recorder records dispatched operations.
@@ -94,7 +100,7 @@ func TestPollDispatchesTickerWhileFileExists(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Poll(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Poll(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "TICKER dispatches", func() bool { return rec.count("TICKER") >= 3 })
@@ -116,7 +122,7 @@ func TestPollDispatchesNotFoundWhileFileMissing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Poll(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Poll(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "NOT_FOUND dispatches", func() bool { return rec.count("NOT_FOUND") >= 3 })
@@ -139,7 +145,7 @@ func TestPollStopsOnContextCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Poll(ctx, file, 10*time.Millisecond, func(op, name string) {}, logs.logger())
+		Poll(ctx, []string{file}, 10*time.Millisecond, func(op, name string) {}, logs.logger())
 	}()
 
 	cancel()
@@ -163,7 +169,7 @@ func TestSuperviseDispatchesExistThenWrite(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -195,7 +201,7 @@ func TestSuperviseRestartsObserverAfterDeleteAndRecreate(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "initial EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -239,7 +245,7 @@ func TestSuperviseDoesNotLeakObserversAcrossCycles(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	const cycles = 6
@@ -280,7 +286,7 @@ func TestSuperviseStopsAndReleasesObserverOnCancel(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.logger())
 	}()
 
 	waitFor(t, 2*time.Second, "EXIST", func() bool { return rec.count("EXIST") == 1 })
@@ -309,7 +315,7 @@ func TestSuperviseWaitsForFileToAppear(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		Supervise(ctx, file, 10*time.Millisecond, rec.dispatch, logs.logger())
+		Supervise(ctx, []string{file}, 10*time.Millisecond, rec.dispatch, logs.errorLogger())
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -326,7 +332,7 @@ func TestSuperviseWaitsForFileToAppear(t *testing.T) {
 	<-done
 
 	if logs.String() != "" {
-		t.Fatalf("unexpected log output while waiting for the file: %s", logs.String())
+		t.Fatalf("unexpected errors while waiting for the file: %s", logs.String())
 	}
 }
 

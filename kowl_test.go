@@ -118,6 +118,66 @@ func TestScriptWithoutKnownHooksFailsAtStartup(t *testing.T) {
 	}
 }
 
+func TestUnknownLogLevelIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", "--log-level", "verbose")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "verbose") {
+		t.Fatalf("stderr %q does not name the rejected level", stderr)
+	}
+}
+
+func TestBrokenGlobIsUsageError(t *testing.T) {
+	code, _, stderr := invoke(t, "-f", "[unterminated", "-j", "example.js")
+
+	if code != exitUsage {
+		t.Fatalf("exit code = %d, want %d", code, exitUsage)
+	}
+	if !strings.Contains(stderr, "unterminated") {
+		t.Fatalf("stderr %q does not name the bad pattern", stderr)
+	}
+}
+
+// The limits are what stop one bad hook from hanging the watcher, so a value that
+// disables them is a mistake rather than a shortcut.
+func TestNonPositiveLimitsAreUsageErrors(t *testing.T) {
+	tests := []struct{ flag, value string }{
+		{"--hook-timeout", "0s"},
+		{"--exec-timeout", "0s"},
+		{"--http-timeout", "-1s"},
+		{"--max-output", "0"},
+		{"--debounce", "-1s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			code, _, stderr := invoke(t, "-f", "/tmp/observed", "-j", "example.js", tt.flag, tt.value)
+
+			if code != exitUsage {
+				t.Fatalf("%s %s exit code = %d, want %d", tt.flag, tt.value, code, exitUsage)
+			}
+			if !strings.Contains(stderr, tt.flag) {
+				t.Fatalf("stderr %q does not name %s", stderr, tt.flag)
+			}
+		})
+	}
+}
+
+func TestFilenameFlagIsRepeatable(t *testing.T) {
+	// Reaching the script check means both -f values were accepted by the parser.
+	missing := filepath.Join(t.TempDir(), "does-not-exist.js")
+
+	code, _, stderr := invoke(t, "-f", "/tmp/one", "-f", "/tmp/two", "-j", missing)
+
+	if code != exitError {
+		t.Fatalf("exit code = %d, want %d (stderr: %s)", code, exitError, stderr)
+	}
+	if !strings.Contains(stderr, "reading script") {
+		t.Fatalf("stderr %q suggests the -f values were not accepted", stderr)
+	}
+}
+
 // The bundled example must stay in sync with the hook names Kowl dispatches.
 func TestExampleScriptDefinesEveryKnownHook(t *testing.T) {
 	hooks, err := NewRunner("example.js").DefinedHooks()

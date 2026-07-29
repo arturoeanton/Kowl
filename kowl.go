@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,15 +23,22 @@ const (
 	exitUsage = 2
 )
 
-// supervisorInterval is how often Kowl checks whether the observed file has appeared or
-// disappeared, so it can rebuild the fsnotify watcher around it.
+// supervisorInterval is how often Kowl re-resolves its patterns, so it can build a
+// watcher around a file that appeared and drop one whose file is gone.
 const supervisorInterval = time.Second
 
 type options struct {
-	Filename       string `short:"f" required:"true" long:"filename" description:"filename that wants to be observed"`
-	Script         string `short:"j" required:"true" long:"javascript" description:"Js that wants that executes the actions"`
-	Millisecond    int    `short:"m" default:"1000" long:"millisecond" description:"Poll interval in milliseconds, 0 disables polling"`
-	FlagNotWatcher bool   `short:"w" long:"flagNotWatcher" description:"Watcher disable"`
+	Filename       []string      `short:"f" required:"true" long:"filename" description:"file, directory or glob to observe, repeatable"`
+	Script         string        `short:"j" required:"true" long:"javascript" description:"JavaScript file holding the hooks"`
+	Millisecond    int           `short:"m" default:"1000" long:"millisecond" description:"poll interval in milliseconds, 0 disables polling"`
+	FlagNotWatcher bool          `short:"w" long:"flagNotWatcher" description:"disable the filesystem watcher, leaving only polling"`
+	Debounce       time.Duration `long:"debounce" default:"200ms" description:"quiet period before a burst of write events runs a hook, 0 disables"`
+	SelfTrigger    bool          `long:"self-trigger" description:"let a hook that writes an observed file wake itself again"`
+	HookTimeout    time.Duration `long:"hook-timeout" default:"30s" description:"how long a hook may run before it is interrupted"`
+	ExecTimeout    time.Duration `long:"exec-timeout" default:"60s" description:"how long a kExec command may run"`
+	HTTPTimeout    time.Duration `long:"http-timeout" default:"30s" description:"how long a kCli request may take"`
+	MaxOutput      int           `long:"max-output" default:"1048576" description:"bytes of stdout and of stderr kept per kExec command"`
+	LogLevel       string        `long:"log-level" default:"info" description:"debug, info or error"`
 }
 
 func init() {
@@ -62,6 +68,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	level, err := ParseLevel(opts.LogLevel)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 	if opts.Millisecond < 0 {
 		fmt.Fprintln(stderr, "-m must be zero or positive")
 		return exitUsage
@@ -70,8 +81,37 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nothing to do: -w disables the watcher and -m 0 disables polling")
 		return exitUsage
 	}
+	for name, value := range map[string]time.Duration{
+		"--hook-timeout": opts.HookTimeout,
+		"--exec-timeout": opts.ExecTimeout,
+		"--http-timeout": opts.HTTPTimeout,
+	} {
+		if value <= 0 {
+			fmt.Fprintf(stderr, "%s must be positive\n", name)
+			return exitUsage
+		}
+	}
+	if opts.Debounce < 0 {
+		fmt.Fprintln(stderr, "--debounce must be zero or positive")
+		return exitUsage
+	}
+	if opts.MaxOutput <= 0 {
+		fmt.Fprintln(stderr, "--max-output must be positive")
+		return exitUsage
+	}
+	if err := ValidatePatterns(opts.Filename); err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitUsage
+	}
 
 	runner := NewRunner(opts.Script)
+	runner.timeout = opts.HookTimeout
+	runner.config = vmConfig{
+		execTimeout: opts.ExecTimeout,
+		httpTimeout: opts.HTTPTimeout,
+		maxOutput:   opts.MaxOutput,
+	}
+
 	hooks, err := runner.DefinedHooks()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -82,19 +122,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitError
 	}
 
-	logger := log.New(stderr, "", log.LstdFlags)
-	logger.Printf("watching %s with %s (hooks: %s)", opts.Filename, opts.Script, strings.Join(hooks, ", "))
+	logger := NewLogger(stderr, level)
+	logger.Infof("watching %s with %s (hooks: %s)",
+		strings.Join(opts.Filename, ", "), opts.Script, strings.Join(hooks, ", "))
 
-	dispatch := func(op, name string) {
-		if err := runner.Run(op, name); err != nil {
-			// A script is only expected to implement the hooks it cares about; the
-			// ones it defines were already reported at startup.
-			if errors.Is(err, ErrHookNotDefined) {
-				return
-			}
-			logger.Printf("%s %s: %v", op, name, err)
-		}
-	}
+	events := newDispatcher(runner.Run, logger, opts.Debounce, opts.SelfTrigger)
 
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
@@ -104,7 +136,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			Supervise(ctx, opts.Filename, supervisorInterval, dispatch, logger)
+			Supervise(ctx, opts.Filename, supervisorInterval, events.Dispatch, logger)
 		}()
 	}
 	if opts.Millisecond > 0 {
@@ -112,12 +144,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			Poll(ctx, opts.Filename, interval, dispatch, logger)
+			Poll(ctx, opts.Filename, interval, events.Dispatch, logger)
 		}()
 	}
 
 	<-ctx.Done()
 	wg.Wait()
-	logger.Println("stopped")
+	events.Close()
+	logger.Infof("stopped")
 	return exitOK
 }
