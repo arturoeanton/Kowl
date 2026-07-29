@@ -1,168 +1,123 @@
 package main
 
 import (
-	"Kowl/js"
-	"github.com/fsnotify/fsnotify"
-	"github.com/jessevdk/go-flags"
-	"github.com/robertkrimen/otto"
-	"github.com/robertkrimen/otto/underscore"
-	"gopkg.in/h2non/gentleman.v2"
-	"gopkg.in/h2non/gentleman.v2/plugins/body"
-	"io/ioutil"
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
+
+	"github.com/jessevdk/go-flags"
+	"github.com/robertkrimen/otto/underscore"
 )
 
-var (
-	opts struct {
-		Filename       string `short:"f" required:"true" long:"filename" description:"filename that wants to be observed"`
-		Script         string `short:"j" required:"true" long:"javascript" description:"Js that wants that executes the actions"`
-		Millisecond    *int   `short:"m" default:"1000" long:"millisecond" description:"Millisecond change check defaul 1000"`
-		FlagNotWatcher bool   `short:"w" long:"flagNotWatcher" description:"Watcher disable"`
-	}
-	errCh chan error
+// Process exit codes.
+const (
+	exitOK    = 0
+	exitError = 1
+	exitUsage = 2
 )
 
-func observer(watcher *fsnotify.Watcher, script, filename string) func() {
-	runjs(script, "EXIST", filename)
-	return func() {
-		var err error
-		watcher, err = fsnotify.NewWatcher()
-		if err != nil {
-			log.Fatalln(err)
-		}
-		defer watcher.Close()
-		watcher.Add(filename)
-		for {
-			select {
-			case event := <-watcher.Events:
-				switch {
-				case event.Op&fsnotify.Write == fsnotify.Write:
-					runjs(script, "WRITE", event.Name)
-				case event.Op&fsnotify.Create == fsnotify.Create:
-					runjs(script, "CREATE", event.Name)
-				case event.Op&fsnotify.Remove == fsnotify.Remove:
-					runjs(script, "REMOVE", event.Name)
-				case event.Op&fsnotify.Rename == fsnotify.Rename:
-					runjs(script, "RENAME", event.Name)
-				case event.Op&fsnotify.Chmod == fsnotify.Chmod:
-					runjs(script, "CHMOD", event.Name)
-				}
-			case err := <-watcher.Errors:
-				errCh <- err
-			}
-		}
-	}
+// supervisorInterval is how often Kowl checks whether the observed file has appeared or
+// disappeared, so it can rebuild the fsnotify watcher around it.
+const supervisorInterval = time.Second
+
+type options struct {
+	Filename       string `short:"f" required:"true" long:"filename" description:"filename that wants to be observed"`
+	Script         string `short:"j" required:"true" long:"javascript" description:"Js that wants that executes the actions"`
+	Millisecond    int    `short:"m" default:"1000" long:"millisecond" description:"Poll interval in milliseconds, 0 disables polling"`
+	FlagNotWatcher bool   `short:"w" long:"flagNotWatcher" description:"Watcher disable"`
+}
+
+func init() {
+	// otto's registry writes Entry.active without a lock, so enabling underscore from a
+	// running VM races against every other VM being constructed. Enable it once, before
+	// any goroutine exists. Importing the package already registers the source.
+	underscore.Enable()
 }
 
 func main() {
-	_, err := flags.ParseArgs(&opts, os.Args)
-	if err != nil {
-		os.Exit(-1)
-	}
-	if err != nil {
-		os.Exit(-1)
-	}
-	filename := opts.Filename
-	script := opts.Script
-	millisecond := *opts.Millisecond
-	flagNotWatcher := opts.FlagNotWatcher
-
-
-	errCh = make(chan error)
-
-	var watcher fsnotify.Watcher
-	var flagExecutedObserver bool
-
-	if !flagNotWatcher {
-		flagExecutedObserver = false
-		ticker := time.NewTicker(time.Duration(1) * time.Second)
-		go func() {
-			for {
-				select {
-				case <-ticker.C:
-					{
-						if _, err := os.Stat(filename); os.IsNotExist(err) {
-							flagExecutedObserver = false
-						} else {
-							if !flagNotWatcher {
-								if !flagExecutedObserver {
-									flagExecutedObserver = true
-									go observer(&watcher, script, filename)()
-								}
-							}
-						}
-					}
-				}
-			}
-		}()
-	}
-
-	if millisecond > 0 {
-		ticker := time.NewTicker(time.Duration(millisecond) * time.Millisecond)
-		go func() {
-			for {
-				select {
-				case <-ticker.C:
-					{
-						if _, err := os.Stat(filename); os.IsNotExist(err) {
-							runjs(script, "NOT_FOUND", filename)
-						} else {
-							if (*opts.Millisecond) > 0 {
-								runjs(script, "TICKER", filename)
-							}
-						}
-					}
-				}
-			}
-		}()
-	}
-	log.Fatalln(<-errCh)
-
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func runjs(script string, op string, name string) {
-	vm := otto.New()
-	underscore.Enable()
-	cli := gentleman.New()
-
-	b, err := ioutil.ReadFile(script) // just pass the file name
-	if err != nil {
-		log.Fatalln(err)
+// run parses args, validates the configuration and blocks until the process is
+// interrupted. It returns the exit code instead of calling os.Exit so that argument
+// handling is testable.
+func run(args []string, stdout, stderr io.Writer) int {
+	var opts options
+	parser := flags.NewParser(&opts, flags.HelpFlag|flags.PassDoubleDash)
+	if _, err := parser.ParseArgs(args); err != nil {
+		var flagsErr *flags.Error
+		if errors.As(err, &flagsErr) && flagsErr.Type == flags.ErrHelp {
+			fmt.Fprintln(stdout, err)
+			return exitOK
+		}
+		fmt.Fprintln(stderr, err)
+		return exitUsage
 	}
-	code := string(b)
 
-	vm.Set("kExec", js.KExec)
+	if opts.Millisecond < 0 {
+		fmt.Fprintln(stderr, "-m must be zero or positive")
+		return exitUsage
+	}
+	if opts.FlagNotWatcher && opts.Millisecond == 0 {
+		fmt.Fprintln(stderr, "nothing to do: -w disables the watcher and -m 0 disables polling")
+		return exitUsage
+	}
 
-	vm.Set("kFileToString", js.KFileToString)
-	vm.Set("kStringToFile", js.KStringToFile)
-	vm.Set("kAppendFile", js.KAppendFile)
-	vm.Set("kRemoveFile", js.KRemoveFile)
+	runner := NewRunner(opts.Script)
+	hooks, err := runner.DefinedHooks()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return exitError
+	}
+	if len(hooks) == 0 {
+		fmt.Fprintf(stderr, "%s defines none of the known hooks (%s)\n", opts.Script, strings.Join(hookNames, ", "))
+		return exitError
+	}
 
-	vm.Set("kEncrypt", js.KEncrypt)
-	vm.Set("kDecrypt", js.KDecrypt)
+	logger := log.New(stderr, "", log.LstdFlags)
+	logger.Printf("watching %s with %s (hooks: %s)", opts.Filename, opts.Script, strings.Join(hooks, ", "))
 
-	vm.Set("kCli", cli)
-	vm.Set("kBodyJSON", body.JSON)
-	vm.Set("kBodyXML", body.XML)
-	vm.Set("kBodyString", body.String)
+	dispatch := func(op, name string) {
+		if err := runner.Run(op, name); err != nil {
+			// A script is only expected to implement the hooks it cares about; the
+			// ones it defines were already reported at startup.
+			if errors.Is(err, ErrHookNotDefined) {
+				return
+			}
+			logger.Printf("%s %s: %v", op, name, err)
+		}
+	}
 
-	vm.Set("kGetEnv", os.Getenv)
-	vm.Set("kSetEnv", os.Setenv)
-	vm.Set("kHostname", os.Hostname)
-	vm.Set("kGetpid", os.Getpid)
-	vm.Set("kGetppid", os.Getppid)
-	vm.Set("kGetgid", os.Getgid)
-	vm.Set("kGetuid", os.Getuid)
-	vm.Set("kGetegid", os.Getegid)
-	vm.Set("kArgs", os.Args)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
 
-	vm.Set("kNow", time.Now)
+	var wg sync.WaitGroup
+	if !opts.FlagNotWatcher {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			Supervise(ctx, opts.Filename, supervisorInterval, dispatch, logger)
+		}()
+	}
+	if opts.Millisecond > 0 {
+		interval := time.Duration(opts.Millisecond) * time.Millisecond
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			Poll(ctx, opts.Filename, interval, dispatch, logger)
+		}()
+	}
 
-	vm.Run(code)
-
-	vm.Call(strings.ToLower(op), nil, name, op, os.Args)
-
+	<-ctx.Done()
+	wg.Wait()
+	logger.Println("stopped")
+	return exitOK
 }
