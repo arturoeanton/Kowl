@@ -15,6 +15,7 @@ no Node.js, no npm and no `require` — one static binary and one `.js` file.
 - [How events reach your hooks](#how-events-reach-your-hooks)
 - [Script API](#script-api)
 - [Output and operations](#output-and-operations)
+- [When something looks wrong](#when-something-looks-wrong)
 - [Command line reference](#command-line-reference)
 - [Building and testing](#building-and-testing)
 - [Notes and limits](#notes-and-limits)
@@ -517,6 +518,55 @@ retrying either way; it just stops narrating.
 
 **Exit codes.** `0` on a clean shutdown or `--help`, `1` when the script cannot be loaded,
 `2` on a usage error.
+
+## When something looks wrong
+
+Kowl is quiet when things work, so the lines it does print are worth reading. These are
+the ones that come up.
+
+**A hook never fires, and nothing is reported.** The editor probably saved by writing a
+new file and renaming it over the old one, which no watch on the original inode can see.
+Watch the containing directory instead of the file: `-f ./config` rather than
+`-f ./config/app.yml`.
+
+**Nothing fires and the path is on a network or container filesystem.** NFS does not
+deliver events at all, and whether they cross a Docker bind mount depends on how files are
+shared. Polling does not need events: add `-m 2s`.
+
+**`hooks cannot keep up: dropped N events`.** The hook is slower than the rate of change.
+Kowl's queue is bounded on purpose — losing events where you can see it beats blocking the
+reader and losing them in the kernel. Make the hook faster, or narrow what is watched.
+
+**`write() is stuck after 30s and was abandoned; it may still be running`.** The hook is
+blocked inside a helper — reading a fifo nobody writes to, or a file on a mount that
+stopped answering. Kowl gave up waiting and carried on, but that hook is still out there.
+`kExec`, `kCli` and `kSleep` have their own limits and never end up here.
+
+**`write() exceeded 30s and was interrupted`.** The hook was busy in JavaScript, most
+likely a loop that does not end. Its VM is discarded and the next event starts clean.
+
+**`--max-watches limit of 4096 reached`.** A recursive watch found more directories than
+it is allowed to watch, and the message names one that was left out. Narrow it with `-x`
+before raising the limit: `-x node_modules -x .git` usually settles it.
+
+**`lost events on /path: fsnotify: queue or buffer overflow, starting over`.** The
+kernel's own queue overflowed and events were lost before Kowl saw them. The watcher is
+rebuilt and the path announced again with `EXIST`, which is the cue to resynchronise from
+whatever your script tracks.
+
+**The same failure over and over, then silence.** It is still happening. A repeated
+failure is reported once and then counted, so it cannot bury everything else; `--log-level
+debug` shows every occurrence.
+
+**A hook runs twice for one save.** An editor emits several events per save, and
+`--debounce` collapses them; a very slow save may outlast the window. Raise it:
+`--debounce 500ms`.
+
+**A hook wakes itself.** Writes made through `kExec` leave no record, so Kowl cannot tell
+them from someone else's. Use `kStringToFile` and the other helpers where that matters.
+
+Before starting anything, `--check` says whether the script loads and what it defines, and
+`--once` runs it against what is there now.
 
 ## Command line reference
 

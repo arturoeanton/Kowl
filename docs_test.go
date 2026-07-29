@@ -231,3 +231,47 @@ func TestEveryHelperIsExercisedByATest(t *testing.T) {
 		}
 	}
 }
+
+// troubleshootingMessages are the log lines the READMEs tell a reader to look for. They
+// are quoted there verbatim, so a reworded message would send people hunting for a string
+// Kowl no longer prints.
+var troubleshootingMessages = []string{
+	"hooks cannot keep up: dropped ",
+	" is stuck after ",
+	" and was abandoned; it may still be running",
+	" and was interrupted",
+	"--max-watches limit of ",
+	"lost events on ",
+}
+
+func TestTroubleshootingQuotesRealMessages(t *testing.T) {
+	sources, err := filepath.Glob("*.go")
+	if err != nil || len(sources) == 0 {
+		t.Fatalf("no sources found: %v", err)
+	}
+	var code strings.Builder
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code.Write(data)
+	}
+
+	english := readDoc(t, "README.md")
+	spanish := readDoc(t, "README.es.md")
+	for _, message := range troubleshootingMessages {
+		if !strings.Contains(code.String(), message) {
+			t.Errorf("the READMEs quote %q, which no source prints", message)
+		}
+		if !strings.Contains(english, message) {
+			t.Errorf("README.md no longer quotes %q", message)
+		}
+		if !strings.Contains(spanish, message) {
+			t.Errorf("README.es.md no longer quotes %q", message)
+		}
+	}
+}
