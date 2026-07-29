@@ -23,6 +23,12 @@ npm, ni `require` — un binario estático y un archivo `.js`.
 ## Arranque rápido
 
 ```
+go install github.com/arturoeanton/Kowl@latest
+```
+
+o desde un clon:
+
+```
 go build -o kowl .
 ```
 
@@ -548,8 +554,9 @@ toma argumentos posicionales; cada path necesita su propio `-f`.
 ## Compilar y testear
 
 ```
-go build -o kowl .
-go build -ldflags "-X main.version=1.2.0" -o kowl .   # estampar una versión de release
+go install github.com/arturoeanton/Kowl@latest        # en $GOBIN
+go build -o kowl .                                     # desde un clon
+go build -ldflags "-X main.version=1.2.0" -o kowl .    # estampar una versión de release
 ```
 
 Las dependencias están fijadas en `go.mod`. Sin una versión estampada, `kowl --version` cae

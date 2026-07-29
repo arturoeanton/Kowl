@@ -22,6 +22,12 @@ no Node.js, no npm and no `require` — one static binary and one `.js` file.
 ## Quick start
 
 ```
+go install github.com/arturoeanton/Kowl@latest
+```
+
+or from a clone:
+
+```
 go build -o kowl .
 ```
 
@@ -542,8 +548,9 @@ positional arguments; every path needs its own `-f`.
 ## Building and testing
 
 ```
-go build -o kowl .
-go build -ldflags "-X main.version=1.2.0" -o kowl .   # stamp a release version
+go install github.com/arturoeanton/Kowl@latest        # into $GOBIN
+go build -o kowl .                                     # from a clone
+go build -ldflags "-X main.version=1.2.0" -o kowl .    # stamp a release version
 ```
 
 Dependencies are pinned in `go.mod`. Without a stamped version, `kowl --version` falls

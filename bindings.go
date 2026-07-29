@@ -16,7 +16,7 @@ import (
 	"gopkg.in/h2non/gentleman.v2/plugins/body"
 	"gopkg.in/h2non/gentleman.v2/plugins/timeout"
 
-	"Kowl/js"
+	"github.com/arturoeanton/Kowl/js"
 )
 
 // underscoreSource is evaluated in every VM so scripts can use _. goja has no importable
